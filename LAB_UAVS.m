@@ -1,16 +1,16 @@
 clear; clc; close all;
     
-syms px py pz real % derivada da posição
+syms px py pz real % derivada da posicao
 syms vx vy vz real % derivada da velocidade
-syms phi theta psi real % ângulos
+syms phi theta psi real % angulos
 syms wx wy wz real % velocidade angular
 states_sym = [px; py; pz; ...
               vx; vy; vz; ...  
               phi; theta; psi; ... 
               wx; wy; wz];
 
-syms Jx Jy Jz real % parâmetros da matriz de Inércia
-syms m g fax fay faz real % parâmetros de massa, gravidade e atrito
+syms Jx Jy Jz real % parametros da matriz de Inercia
+syms m g fax fay faz real % parametros de massa, gravidade e atrito
 
 syms T npx npy npz  real % input
 
@@ -29,7 +29,7 @@ Q = [1, sin(phi)*tan(theta), cos(phi)*tan(theta);
     0, cos(phi),           -sin(phi);
     0, sin(phi)/cos(theta), cos(phi)/cos(theta)];
 
-% matrizes
+% Vetores
 p = [px; py; pz];
 v = [vx; vy; vz];
 lambda = [phi; theta; psi];
@@ -47,7 +47,7 @@ D = [fax, 0, 0;
 
 % f(x,u)
 dp = R * v;
-dv = cross(-omega, v) + (1/m) * (R' * fg_inertial + D*v + [0; 0; T]);
+dv = cross(-omega, v) + (1/m) * (R' * fg_inertial - D*v + [0; 0; T]);
 dlambda = Q * omega;
 domega = J \ (cross(-omega, J * omega) + sym(np));
 
@@ -93,33 +93,19 @@ domega_u = jacobian(domega, u);
 B = [dp_u; dv_u; dlambda_u; domega_u];
 
 %% Linearização
+params_sym = [m; g; Jx; Jy; Jz; fax; fay; faz];
+params_val = [0.027; 9.81; 3.3e-5; 3.6e-5; 5.9e-5; 0.01; 0.01; 0.01];
 
+all_syms = [states_sym; params_sym; T; npx; npy; npz];
 
-%% A_OP1
-% O mais lógico em hover é phi_e=0 e theta_e=0, psi_e pode ser qualquer
+%% OP1
+% O mais logico em hover e phi_e=0 e theta_e=0, psi_e pode ser qualquer
 % valor, mexer nos valores.
-params_sym_1 = [m; g; Jx; Jy; Jz; fax; fay; faz];
-params_val_1 = [0.027; 9.81; 3.3e-5; 3.6e-5; 5.9e-5; 0.01; 0.01; 0.01];
+xe_1=[10;10;10; 0;0;0; 0;0;0; 0;0;0]; 
+ue_1=[params_val(1)*params_val(2)/(cos(xe_1(7))*cos(xe_1(8)));0;0;0];
 
-input_val_1 = [0; 0; 0; 0];
-input_sym_1 = [T; npx; npy; npz];
-
-all_syms = [states_sym; params_sym_1; input_sym_1];
-
-xe_1=[10;10;10; 0;0;0; 0;pi/4;0; 0;0;0]; 
-ue_1=[-m*g*cos(xe_1(7))*cos(xe_1(8));0;0;0];
-all_vals_1 = [xe_1; params_val_1; input_val_1];
-
-A_OP1 = double(subs(A, all_syms, all_vals_1));
-B_OP1 = double(subs(B, all_syms, all_vals_1));
-eig_OP1=eig(A_OP1);
-
-figure;
-plot(real(eig_OP1), imag(eig_OP1), 'ro', 'LineWidth', 2, 'MarkerSize', 8);
-grid on;
-xlabel('Real Part');
-ylabel('Imaginary Part');
-title('OP1');
+A_OP1 = double(subs(A, all_syms, [xe_1; params_val; ue_1]));
+B_OP1 = double(subs(B, all_syms, [xe_1; params_val; ue_1]));
 
 x_til1=x-xe_1;
 u_til1=u-ue_1;
@@ -127,39 +113,42 @@ u_til1=u-ue_1;
 dx_til_OP1=A_OP1*x_til1+B_OP1*u_til1;
 
 %% A_OP2
-params_sym_2 = [m; g; Jx; Jy; Jz; fax; fay; faz];
-params_val_2 = [0.027; 9.81; 3.3e-5; 3.6e-5; 5.9e-5; 0.01; 0.01; 0.01];
+% Primeiro simplificar com drone a andar so no eixo do x, vy=0 e phi=0
+theta_e2 = pi/4;
+phi_e2   = 0;
 
-input_sym_2 = [T; npx; npy; npz];
-input_val_2 = [0; 0; 0; 0];
+vx_e2 = (params_val(1) * params_val(2) * sin(pi/4)) / params_val(6);
+vy_e2 = (-params_val(1) * params_val(2) * sin(phi_e2) * cos(theta_e2))...
+    / params_val(7);
+vz_e2 = 0;
 
-all_syms_2 = [states_sym; params_sym_2; input_sym_2];
+xe_2 = [10; 10; 10; vx_e2; vy_e2; vz_e2; phi_e2; theta_e2; 0; 0; 0; 0];
+ue_2 = [params_val(1) * params_val(2) * cos(phi_e2) * cos(theta_e2); ...
+    0; 0; 0];
 
-xe_2=[10;10;10; vx;vy;0; 0;pi/4;0; 0;0;0];
-
-vx_2 = m * g * sin(xe_2(8)) / fax;
-vy_2 = (-m * g * cos(xe_2(8)) * cos(xe_2(7))) / fay;
-vx_2 = subs(vx_2,params_sym_2, params_val_2);
-vy_2 = subs(vy_2,params_sym_2, params_val_2);
-xe_2=subs(xe_2, [vx;vy], [vx_2; vy_2]);
-
-ue_2=[m*g*cos(xe_2(7))*cos(xe_2(8));0;0;0];
-ue_2=subs(ue_2, params_sym_2, params_val_2);
-all_vals_2 = [xe_2; params_val_2; ue_2];
-
-
-A_OP2 = double(subs(A, all_syms_2, all_vals_2));
-B_OP2 = double(subs(B, all_syms_2, all_vals_2));
-eig_OP2=eig(A_OP2);
-
-figure;
-plot(real(eig_OP2), imag(eig_OP2), 'ro', 'LineWidth', 2, 'MarkerSize', 8);
-grid on;
-xlabel('Real Part');
-ylabel('Imaginary Part');
-title('OP2');
-
+A_OP2 = double(subs(A, all_syms, [xe_2; params_val; ue_2]));
+B_OP2 = double(subs(B, all_syms, [xe_2; params_val; ue_2]));
 
 x_til2=x-xe_2;
 u_til2=u-ue_2;
 dx_til_OP2=A_OP2*x_til2+B_OP2*u_til2;
+
+%% Plot Eigenvalues
+
+figure;
+hold on;
+grid on;
+
+e1 = eig(A_OP1);
+e2 = eig(A_OP2);
+
+h1 = plot(real(e1), imag(e1), 'ro', 'MarkerSize', 10, 'LineWidth', ...
+    1.5, 'DisplayName', 'OP1 (Hover)');
+h2 = plot(real(e2), imag(e2), 'bx', 'MarkerSize', 10, 'LineWidth', ...
+    1.5, 'DisplayName', 'OP2 (Horizontal)');
+
+xline(0, 'k-', 'HandleVisibility', 'off');
+yline(0, 'k-', 'HandleVisibility', 'off');
+xlabel('Re');
+ylabel('Imag');
+legend([h1, h2], 'Location', 'best');
