@@ -152,3 +152,55 @@ yline(0, 'k-', 'HandleVisibility', 'off');
 xlabel('Re');
 ylabel('Imag');
 legend([h1, h2], 'Location', 'best');
+
+%% Models controlability, observability and stability
+n_OP1 = length(A_OP1);
+n_OP2 = length(A_OP2);
+C_OP1 = eye(12);
+C_OP2 = eye(12);
+
+% OP1
+%   controlability
+Mc_OP1 = ctrb( A_OP1, B_OP1);  % Mc = [ B | A*B | ... | A^(n-1)*B ]
+rank(Mc_OP1)
+if ( rank(Mc_OP1) == n_OP1 )
+    disp( 'OP1 linear model is fully controllable' )
+else
+    disp( 'OP1 linear model is not fully controllable')
+end
+
+%   observability
+Mo_OP1 = obsv(A_OP1 , C_OP1);  % Mo = [ C; C*A ]
+
+rank(Mo_OP1)
+if ( rank(Mo_OP1) == n_OP1 )
+    disp( 'OP1 linear model is fully observable' )
+else
+    disp( 'OP1 linear model is not fully observable')
+end
+
+%   stability
+J_OP1 = jordan(A_OP1);
+
+% OP2
+%   controlability
+Mc_OP2 = ctrb( A_OP2, B_OP2);  % Mc = [ B | A*B | ... | A^(n-1)*B ]
+rank(Mc_OP2)
+if ( rank(Mc_OP2) == n_OP2 )
+    disp( 'OP2 linear model is fully controllable' )
+else
+    disp( 'OP2 linear model is not fully controllable')
+end
+
+%   observability
+Mo_OP2 = obsv(A_OP2 , C_OP2);  % Mo = [ C; C*A ]
+
+rank(Mo_OP2)
+if ( rank(Mo_OP2) == n_OP2 )
+    disp( 'OP2 linear model is fully observable' )
+else
+    disp( 'OP2 linear model is not fully observable')
+end
+
+%   stability
+J_OP2 = jordan(A_OP2);
