@@ -204,3 +204,40 @@ end
 
 %   stability
 J_OP2 = jordan(A_OP2);
+
+%% Transfer functions P13
+% OP1
+
+sys_OP1 = ss(A_OP1, B_OP1, eye(12), zeros(12,4));
+sys_tf_OP1 = tf(sys_OP1);
+
+G_nx_phi_sym_OP1 = sys_tf_OP1(7, 2); % nx/phi
+G_ny_theta_sym_OP1 = sys_tf_OP1(8, 3); % ny/theta
+G_nz_psi_sym_OP1 = sys_tf_OP1(9, 4); % nz/psi
+
+G_px_theta_sym_OP1 = sys_tf_OP1(1, 3) / sys_tf_OP1(8, 3); % px/theta
+G_py_phi_sym_OP1 = sys_tf_OP1(2, 2) / sys_tf_OP1(7, 2); % py/phi
+G_pz_T_sym_OP1 = sys_tf_OP1(3, 1); % pz/T
+
+figure;
+rlocus(G_pz_T_sym_OP1);
+figure;
+rlocus(G_py_phi_sym_OP1);
+
+
+% OP2
+sys_OP2 = ss(A_OP2, B_OP2, eye(12), zeros(12,4));
+sys_tf_OP2 = tf(sys_OP2);
+
+G_nx_phi_sym_OP2 = sys_tf_OP2(7, 2); % nx/phi
+G_ny_theta_sym_OP2 = sys_tf_OP2(8, 3); % ny/theta
+G_nz_psi_sym_OP2 = sys_tf_OP2(9, 4); % nz/psi
+
+G_px_theta_sym_OP2 = sys_tf_OP2(1, 3) / sys_tf_OP2(8, 3); % px/theta
+G_py_phi_sym_OP2 = sys_tf_OP2(2, 2) / sys_tf_OP2(7, 2); % py/phi
+G_pz_T_sym_OP2 = sys_tf_OP2(3, 1); % pz/T
+
+figure;
+rlocus(G_pz_T_sym_OP2);
+figure;
+rlocus(G_py_phi_sym_OP2);
