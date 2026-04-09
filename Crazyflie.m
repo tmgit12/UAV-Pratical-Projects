@@ -126,7 +126,7 @@ B_OP1 = double(subs(B_sym, [X; U; param_syms'], [xe_op1; ue_op1; param_values'])
 
 %--------------------------------------------------------------------------
 % OP2 (Horizontal Flight)
-Vx_op2 = 10; Vy_op2 = 0.5; psi_op2 = pi/4; % 0.5 m/s forward flight at 45 deg yaw
+Vx_op2 = 0.5; Vy_op2 = 0; psi_op2 = 10*pi/180; % 0.5 m/s forward flight at 45 deg yaw
 [u2, v2, w2, th2, ph2, T2] = State_input_equilibrium_functions(Vx_op2, Vy_op2, psi_op2, ...
                                     param_values(1), param_values(2), param_values(6), ...
                                     param_values(7), param_values(8));
@@ -152,6 +152,64 @@ xlabel('Real'); ylabel('Imaginary');
 title('Eigenvalues: OP1 (Hover) vs OP2 (Horizontal)');
 legend('OP1 (Hover)', 'OP2 (Horizontal)');
 
+%% 1.9 Analyze controlability, observability and stability
+
+%--------------------------------------------------------------------------
+% OP1
+
+n_OP1 = length(A_OP1);
+C_OP1 = eye(12);
+
+% Controlability
+Mc_OP1 = ctrb( A_OP1, B_OP1);  % Mc = [ B | A*B | ... | A^(n-1)*B ]
+rank(Mc_OP1);
+if ( rank(Mc_OP1) == n_OP1 )
+    disp( 'OP1 linear model is fully controllable' )
+else
+    disp( 'OP1 linear model is not fully controllable')
+end
+
+% Observability
+Mo_OP1 = obsv(A_OP1 , C_OP1);  % Mo = [ C; C*A; ...; C*A^(n-1) ]
+
+rank(Mo_OP1);
+if ( rank(Mo_OP1) == n_OP1 )
+    disp( 'OP1 linear model is fully observable' )
+else
+    disp( 'OP1 linear model is not fully observable')
+end
+
+% Stability
+J_OP1 = jordan(A_OP1);
+
+%--------------------------------------------------------------------------
+% OP2
+
+n_OP2 = length(A_OP2);
+C_OP2 = eye(12);
+
+% Controlability
+Mc_OP2 = ctrb( A_OP2, B_OP2);  % Mc = [ B | A*B | ... | A^(n-1)*B ]
+rank(Mc_OP2);
+if ( rank(Mc_OP2) == n_OP2 )
+    disp( 'OP2 linear model is fully controllable' )
+else
+    disp( 'OP2 linear model is not fully controllable')
+end
+
+% Observability
+Mo_OP2 = obsv(A_OP2 , C_OP2);  % Mo = [ C; C*A; ...; C*A^(n-1) ]
+
+rank(Mo_OP2);
+if ( rank(Mo_OP2) == n_OP2 )
+    disp( 'OP2 linear model is fully observable' )
+else
+    disp( 'OP2 linear model is not fully observable')
+end
+
+% Stability
+J_OP2 = jordan(A_OP2);
+
 %% 1.10 Deduce transfer functions
 %--------------------------------------------------------------------------
 % OP1
@@ -159,36 +217,144 @@ legend('OP1 (Hover)', 'OP2 (Horizontal)');
 sys_OP1 = ss(A_OP1, B_OP1, eye(12), zeros(12,4));
 sys_tf_OP1 = tf(sys_OP1);
 
-G_nx_phi_sym_OP1 = sys_tf_OP1(7, 2); % nx/phi
-G_ny_theta_sym_OP1 = sys_tf_OP1(8, 3); % ny/theta
-G_nz_psi_sym_OP1 = sys_tf_OP1(9, 4); % nz/psi
+% Inner Loops (Attitude) - Use zpk to see the exact poles and zeros
+G_nx_phi_sym_OP1 = zpk(minreal(sys_tf_OP1(7, 2))); % nx/phi
+G_ny_theta_OP1 = zpk(minreal(sys_tf_OP1(8, 3))); % ny/theta
+G_nz_psi_OP1 = zpk(minreal(sys_tf_OP1(9, 4))); % nz/psi
 
-G_px_theta_sym_OP1 = sys_tf_OP1(1, 3) / sys_tf_OP1(8, 3); % px/theta
-G_py_phi_sym_OP1 = sys_tf_OP1(2, 2) / sys_tf_OP1(7, 2); % py/phi
-G_pz_T_sym_OP1 = sys_tf_OP1(3, 1); % pz/T
-
-figure;
-rlocus(G_pz_T_sym_OP1);
-figure;
-rlocus(G_py_phi_sym_OP1);
+% Outer Loops (Position) - minreal
+G_px_theta_OP1 = zpk(minreal(sys_tf_OP1(1, 3) / sys_tf_OP1(8, 3))); % px/theta
+G_py_phi_OP1 = zpk(minreal(sys_tf_OP1(2, 2) / sys_tf_OP1(7, 2))); % py/phi
+G_pz_T_OP1 = zpk(minreal(sys_tf_OP1(3, 1))); % pz/T
 
 %--------------------------------------------------------------------------
 % OP2
 sys_OP2 = ss(A_OP2, B_OP2, eye(12), zeros(12,4));
 sys_tf_OP2 = tf(sys_OP2);
 
-G_nx_phi_sym_OP2 = sys_tf_OP2(7, 2); % nx/phi
-G_ny_theta_sym_OP2 = sys_tf_OP2(8, 3); % ny/theta
-G_nz_psi_sym_OP2 = sys_tf_OP2(9, 4); % nz/psi
+% Inner Loops (Attitude) - Use zpk to see the exact poles and zeros
+G_nx_phi_sym_OP2 = zpk(minreal(sys_tf_OP2(7, 2))); % nx/phi
+G_ny_theta_OP2 = zpk(minreal(sys_tf_OP2(8, 3))); % ny/theta
+G_nz_psi_OP2 = zpk(minreal(sys_tf_OP2(9, 4))); % nz/psi
 
-G_px_theta_sym_OP2 = sys_tf_OP2(1, 3) / sys_tf_OP2(8, 3); % px/theta
-G_py_phi_sym_OP2 = sys_tf_OP2(2, 2) / sys_tf_OP2(7, 2); % py/phi
-G_pz_T_sym_OP2 = sys_tf_OP2(3, 1); % pz/T
+% Outer Loops (Position) - minreal
+G_px_theta_OP2 = zpk(minreal(sys_tf_OP2(1, 3) / sys_tf_OP2(8, 3))); % px/theta
+G_py_phi_OP2 = zpk(minreal(sys_tf_OP2(2, 2) / sys_tf_OP2(7, 2))); % py/phi
+G_pz_T_OP2 = zpk(minreal(sys_tf_OP2(3, 1))); % pz/T
 
+%% 1.11 Closed loop stability of G_{T,pz}(s) and G_{ϕ,py}(s)
+
+%--------------------------------------------------------------------------
+% OP1
+
+figure;
+rlocus(G_pz_T_OP1);
+figure;
+rlocus(G_py_phi_OP1);
+
+%--------------------------------------------------------------------------
+% OP2
 figure;
 rlocus(G_pz_T_sym_OP2);
 figure;
 rlocus(G_py_phi_sym_OP2);
+
+%% 2. Identification
+clear all
+
+% read file
+csvfilename = '2024-04-04_log07.csv';
+
+array = dlmread(csvfilename,',',1,0);
+
+% get data from table (octave)
+time = array(:,1)'*1e-3;
+%dt = mean(t(2:end)-t(1:end-1)); % estimate of sample time
+dt = mean(diff(time));
+pos = array(:,2:4)';
+vel = array(:,5:7)';
+lbd = array(:,8:10)'*pi/180;
+om = array(:,11:13)'*pi/180;
+pos_ref = array(:,14:16)';
+yaw_ref = array(:,17)';
+motors = array(:,18:21)';
+
+% convert date to print format
+t = time - time(1);
+x = [pos;vel;lbd;om];
+x_ref = [pos_ref;0*vel;lbd*0;om*0];
+x_ref(9,:) = yaw_ref;
+uint16_max = 2^16;
+u = motors/uint16_max;
+
+% plot data
+%initPlots;
+%vehicle3d_ref_show_data(t,x,u,x_ref);
+
+% prepare data for ID
+% dt = diff(t);
+% dt = [dt,dt(end)];
+% sample_time_stats = [mean(dt),min(dt),max(dt)],
+% Ts = sample_time_stats(1);
+%u_id = lbd(1,:)';
+%y_id = pos(2,:)';
+
+%% 2.1 Motion in x,y and z
+
+% Looking at the position plots the following intervals of time were
+% considered for movement in each axis:
+t_x_start = 74;  t_x_end = 101; % Replace with actual times from plot
+t_y_start = 104; t_y_end = 131; % Replace with actual times from plot
+t_z_start = 44; t_z_end = 71; % Replace with actual times from plot
+
+% indices dos intervalos de tempo
+idx_X = (t >= t_x_start) & (t <= t_x_end);
+idx_Y = (t >= t_y_start) & (t <= t_y_end);
+idx_Z = (t >= t_z_start) & (t <= t_z_end);
+
+px = pos(1,:);
+py = pos(2,:);
+pz = pos(3,:);
+
+phi = lbd(1,:);
+theta = lbd(2,:);
+psi = lbd(3,:);
+
+% Datasets para movimento no x, y e z
+Dataset_X.t = t(idx_X) - t(find(idx_X, 1, 'first'));
+Dataset_X.px = px(idx_X);
+Dataset_X.theta = theta(idx_X);
+
+Dataset_Y.t = t(idx_Y) - t(find(idx_Y, 1, 'first'));
+Dataset_Y.py = py(idx_Y);
+Dataset_Y.phi = phi(idx_Y);
+
+Dataset_Z.t = t(idx_Z) - t(find(idx_Z, 1, 'first'));
+Dataset_Z.pz = pz(idx_Z);
+Dataset_Z.thrust = u(:, idx_Z);
+
+%% 2.3 Identify modes
+
+data_x = iddata(Dataset_X.px', Dataset_X.theta', dt);
+data_y = iddata(Dataset_Y.py', Dataset_Y.phi', dt);
+data_z = iddata(Dataset_Z.pz', Dataset_Z.thrust', dt);
+
+% Change the last two values corresponding to the expected amount of zeros
+% and poles, respectively, for each transfer function
+sys_px_theta = tfest(detrend(data_x), 2, 0);
+sys_py_phi = tfest(detrend(data_y), 2, 0);
+sys_pz_T = tfest(detrend(data_z), 2, 0);
+
+%% 2.4 Model comparison
+
+figure;
+compare(data_x, sys_px_theta);
+
+figure;
+compare(data_y, sys_py_phi);
+
+figure;
+compare(data_z, sys_pz_T);
 
 %% Functions
 
@@ -208,6 +374,9 @@ function dX = drone_dynamics(X, m, g, J, u, D)
 
     T=u(1);
     np=u(2:4);
+
+    % Skew-symmetric matrix for omega
+    S_omega = skew(omega);
     
     % Rotation Matrix (Z-Y-X Euler to Body->Inertial)
     R = [cos(theta)*cos(psi), sin(phi)*sin(theta)*cos(psi) - cos(phi)*sin(psi), cos(phi)*sin(theta)*cos(psi) + sin(phi)*sin(psi);
@@ -218,11 +387,15 @@ function dX = drone_dynamics(X, m, g, J, u, D)
     Q = [1, sin(phi)*tan(theta), cos(phi)*tan(theta);
          0, cos(phi),           -sin(phi);
          0, sin(phi)/cos(theta), cos(phi)/cos(theta)];
-         
-    dp = R * v; % Body to Inertial linear velocity
-    dv = -skew(omega)*v + R.'*[0; 0; -g] + [0; 0; T/m]-(D*v)/m; % Linear velocity dynamics (Newton's 2nd law in Body Frame)
-    dlambda = Q * omega; % Body to Inertial  angular velocity
-    domega = J \ (-skew(omega) * J * omega + np); % Angular velocity dynamics (Euler's Equation)
+
+    % Body to Inertial linear velocity     
+    dp = R * v; 
+    % Linear velocity dynamics (Newton's 2nd law in Body Frame)
+    dv = -S_omega*v + R.'*[0; 0; -g] + [0; 0; T/m]-(D*v)/m;
+    % Body to Inertial  angular velocity
+    dlambda = Q * omega;
+    % Angular velocity dynamics (Euler's Equation)
+    domega = J \ (-S_omega * J * omega + np); 
     % o Matlab recomenda fazer "J \ (-skew(w) * J * omega + np)" em vez de
     % "inv(J) * (-skew(w) * J * omega + np)" 
     
