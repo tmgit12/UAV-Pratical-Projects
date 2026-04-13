@@ -7,9 +7,9 @@ clear; clc; close all;
 m = 0.027; % Mass in kg
 g = 9.81; % Gravity in m/s^2
 l = 0.05; % Arm length in m
-Jx = 3.3e-5; Jy = 3.6e-5; Jz = 5.9e-5; 
+Jx = 1.4e-5; Jy = 1.4e-5; Jz = 2.17e-5; 
 J = diag([Jx, Jy, Jz]); % Inertia Matrix in kg*m^2
-dx = 0.01; dy = 0.01; dz = 0.01;
+dx = 9.18e-7; dy = 9.18e-7; dz = 10.31e-7;
 D = diag([dx, dy, dz]); % Drag Matrix in kg/s
 
 %% 1.5 Nonlinear model simulation
@@ -106,11 +106,11 @@ B_sym = jacobian(f, U);
 
 % Physical parameter value substitution
 param_syms   = [m, g, Jx, Jy, Jz, dx, dy, dz];
-param_values = [0.027, 9.81, 3.3e-5, 3.6e-5, 5.9e-5, 0.01, 0.01, 0.01];
+param_values = [0.027, 9.81, 1.4e-5, 1.4e-5, 2.17e-5, 9.18e-7, 9.18e-7, 10.31e-7];
 
 %--------------------------------------------------------------------------
 % OP1 (Hover)
-Vx_op1 = 0; Vy_op1 = 0; psi_op1 = 0; % Stationary hover
+Vx_op1 = 0; Vy_op1 = 0; psi_op1 = 45*pi/180; % Stationary hover
 [u1, v1, w1, th1, ph1, T1] = State_input_equilibrium_functions(Vx_op1, Vy_op1, psi_op1, ...
                                     param_values(1), param_values(2), param_values(6), ...
                                     param_values(7), param_values(8));
@@ -126,7 +126,7 @@ B_OP1 = double(subs(B_sym, [X; U; param_syms'], [xe_op1; ue_op1; param_values'])
 
 %--------------------------------------------------------------------------
 % OP2 (Horizontal Flight)
-Vx_op2 = 0.5; Vy_op2 = 0; psi_op2 = 10*pi/180; % 0.5 m/s forward flight at 45 deg yaw
+Vx_op2 = 0.5; Vy_op2 = 0; psi_op2 = 45*pi/180; % 0.5 m/s forward flight at 45 deg yaw
 [u2, v2, w2, th2, ph2, T2] = State_input_equilibrium_functions(Vx_op2, Vy_op2, psi_op2, ...
                                     param_values(1), param_values(2), param_values(6), ...
                                     param_values(7), param_values(8));
@@ -217,12 +217,12 @@ J_OP2 = jordan(A_OP2);
 sys_OP1 = ss(A_OP1, B_OP1, eye(12), zeros(12,4));
 sys_tf_OP1 = tf(sys_OP1);
 
-% Inner Loops (Attitude) - Use zpk to see the exact poles and zeros
+% Inner Loops (Attitude)
 G_nx_phi_sym_OP1 = zpk(minreal(sys_tf_OP1(7, 2))); % nx/phi
 G_ny_theta_OP1 = zpk(minreal(sys_tf_OP1(8, 3))); % ny/theta
 G_nz_psi_OP1 = zpk(minreal(sys_tf_OP1(9, 4))); % nz/psi
 
-% Outer Loops (Position) - minreal
+% Outer Loops (Position)
 G_px_theta_OP1 = zpk(minreal(sys_tf_OP1(1, 3) / sys_tf_OP1(8, 3))); % px/theta
 G_py_phi_OP1 = zpk(minreal(sys_tf_OP1(2, 2) / sys_tf_OP1(7, 2))); % py/phi
 G_pz_T_OP1 = zpk(minreal(sys_tf_OP1(3, 1))); % pz/T
@@ -232,12 +232,12 @@ G_pz_T_OP1 = zpk(minreal(sys_tf_OP1(3, 1))); % pz/T
 sys_OP2 = ss(A_OP2, B_OP2, eye(12), zeros(12,4));
 sys_tf_OP2 = tf(sys_OP2);
 
-% Inner Loops (Attitude) - Use zpk to see the exact poles and zeros
+% Inner Loops (Attitude)
 G_nx_phi_sym_OP2 = zpk(minreal(sys_tf_OP2(7, 2))); % nx/phi
 G_ny_theta_OP2 = zpk(minreal(sys_tf_OP2(8, 3))); % ny/theta
 G_nz_psi_OP2 = zpk(minreal(sys_tf_OP2(9, 4))); % nz/psi
 
-% Outer Loops (Position) - minreal
+% Outer Loops (Position)
 G_px_theta_OP2 = zpk(minreal(sys_tf_OP2(1, 3) / sys_tf_OP2(8, 3))); % px/theta
 G_py_phi_OP2 = zpk(minreal(sys_tf_OP2(2, 2) / sys_tf_OP2(7, 2))); % py/phi
 G_pz_T_OP2 = zpk(minreal(sys_tf_OP2(3, 1))); % pz/T
@@ -332,6 +332,85 @@ Dataset_Y.phi = phi(idx_Y);
 Dataset_Z.t = t(idx_Z) - t(find(idx_Z, 1, 'first'));
 Dataset_Z.pz = pz(idx_Z);
 Dataset_Z.thrust = u(:, idx_Z);
+Dataset_Z.thrust = sum(Dataset_Z.thrust, 1); % T_total=4*T_motor
+
+%% 2.2 Input Output relationship
+
+% Cropped Datasets
+% This cropped sets correspond to a step input and response of the drone
+% and are used to identify the order and parameters of the transfer
+% fucntions in 2.2
+crop_X = (Dataset_X.t >= 0) & (Dataset_X.t <= 5.5);
+Dataset_X.t_crop = Dataset_X.t(crop_X);
+Dataset_X.px_crop = Dataset_X.px(crop_X);
+Dataset_X.px_ref_crop = Dataset_X.px_ref(crop_X);
+Dataset_X.theta_crop = Dataset_X.theta(crop_X);
+
+crop_Y = (Dataset_Y.t >= 0) & (Dataset_Y.t <= 5.5);
+Dataset_Y.t_crop = Dataset_Y.t(crop_Y);
+Dataset_Y.py_crop = Dataset_Y.py(crop_Y);
+Dataset_Y.py_ref_crop = Dataset_Y.py_ref(crop_Y);
+Dataset_Y.phi_crop = Dataset_Y.phi(crop_Y);
+
+crop_Z = (Dataset_Z.t >= 19) & (Dataset_Z.t <= 25);
+Dataset_Z.t_crop = Dataset_Z.t(crop_Z);
+Dataset_Z.pz_crop = Dataset_Z.pz(crop_Z);
+Dataset_Z.pz_ref_crop = Dataset_Z.pz_ref(crop_Z);
+Dataset_Z.thrust_crop = Dataset_Z.thrust(:, crop_Z);
+
+% px vs px_ref
+figure('Name', 'px vs px_ref');
+subplot(2,1,1);
+plot(Dataset_X.t_crop, Dataset_X.px_crop, 'b-', 'LineWidth', 2); hold on;
+plot(Dataset_X.t_crop, Dataset_X.px_ref_crop, 'k--', 'LineWidth', 1.5);
+ylabel('Position [m]'); grid on;
+legend('Measured p_x', 'Reference p_{x,ref}', 'Location', 'best');
+title('X-Axis');
+
+subplot(2,1,2); %
+plot(Dataset_X.t_crop, Dataset_X.theta_crop * 180/pi, 'r', 'LineWidth', 1.5);
+ylabel('Pitch \theta [deg]'); grid on; xlabel('Time [s]');
+
+%  py vs py_ref
+figure('Name', 'py vs py_ref');
+subplot(2,1,1);
+plot(Dataset_Y.t_crop, Dataset_Y.py_crop, 'b-', 'LineWidth', 2); hold on;
+plot(Dataset_Y.t_crop, Dataset_Y.py_ref_crop, 'k--', 'LineWidth', 1.5);
+ylabel('Position [m]'); grid on;
+legend('Measured p_y', 'Reference p_{y,ref}', 'Location', 'best');
+title('Y-Axis');
+
+subplot(2,1,2);
+plot(Dataset_Y.t_crop, Dataset_Y.phi_crop * 180/pi, 'r', 'LineWidth', 1.5);
+ylabel('Roll \phi [deg]'); grid on; xlabel('Time [s]');
+
+% p_z vs T
+figure('Name', 'pz vs pz_ref');
+subplot(2,1,1);
+plot(Dataset_Z.t_crop, Dataset_Z.pz_crop, 'b-', 'LineWidth', 2); hold on;
+plot(Dataset_Z.t_crop, Dataset_Z.pz_ref_crop, 'k--', 'LineWidth', 1.5);
+ylabel('Position [m]'); grid on;
+legend('Measured p_z', 'Reference p_{z,ref}', 'Location', 'best');
+title('Z-Axis');
+
+subplot(2,1,2);
+plot(Dataset_Z.t_crop, total_thrust_Z_crop, 'r', 'LineWidth', 1.5);
+ylabel('Total Thrust [norm]'); grid on; xlabel('Time [s]');
+
+[ov_x, rt_x, st_x] = response_parameters( ...
+    Dataset_X.px_crop, ...
+    Dataset_X.t_crop);
+[ov_y, rt_y, st_y] = response_parameters( ...
+    Dataset_Y.py_crop, ...
+    Dataset_Y.t_crop);
+
+[ov_z, rt_z, st_z] = response_parameters( ...
+    Dataset_Z.pz_crop, ...
+    Dataset_Z.t_crop);
+
+G_px_theta = get_2nd_order_tf(ov_x, rt_x, st_x);
+G_py_phi = get_2nd_order_tf(ov_y, rt_y, st_y);
+G_pz_T = get_2nd_order_tf(ov_z, rt_z, st_z);
 
 %% 2.3 Identify modes
 
@@ -347,14 +426,26 @@ sys_pz_T = tfest(detrend(data_z), 2, 0);
 
 %% 2.4 Model comparison
 
-figure;
-compare(data_x, sys_px_theta);
+figure('Name', 'X-Axis: Step response Calculated vs Matlab Identified vs Theoretical');
+% compare(dataset, model1, model2, model3)
+compare(detrend(data_x), sys_px_theta, G_px_theta, G_px_theta_OP1);
+title('X-Axis Model Comparison (px / \theta)');
+legend('Measured Data', 'Algorithm (tfest)', 'Calculated (2nd Order)', 'Theoretical Linear (OP1)', 'Location', 'best');
+grid on;
 
-figure;
-compare(data_y, sys_py_phi);
+% Y-Axis
+figure('Name', 'Y-Axis: Step response Calculated vs Matlab Identified vs Theoretical');
+compare(detrend(data_y), sys_py_phi, G_py_phi, G_py_phi_OP1);
+title('Y-Axis Model Comparison (py / \phi)');
+legend('Measured Data', 'Algorithm (tfest)', 'Calculated (2nd Order)', 'Theoretical Linear (OP1)', 'Location', 'best');
+grid on;
 
-figure;
-compare(data_z, sys_pz_T);
+% Z-Axis
+figure('Name', 'Z-Axis: Step response Calculated vs Matlab Identified vs Theoretical');
+compare(detrend(data_z), sys_pz_T, G_pz_T, G_pz_T_OP1);
+title('Z-Axis Model Comparison (pz / T)');
+legend('Measured Data', 'Algorithm (tfest)', 'Calculated (2nd Order)', 'Theoretical Linear (OP1)', 'Location', 'best');
+grid on;
 
 %% Functions
 
@@ -443,4 +534,74 @@ function [u, v, w, theta, phi, T] = State_input_equilibrium_functions(vx, vy, ps
     % T
     % Derived from T = (mg - dz * ky) * cos(theta) * cos(phi) + dz * sqrt(W^2 + D^2)
     T = (m*g - dz*ky) .* cos_theta .* cos_phi + dz .* sqrt(W.^2 + D.^2);
+end
+
+function [overshoot, rise_time, settling_time] = response_parameters(y, t)
+  
+    y_ss   = y(end);
+    y_init = y(1);
+    step_height = y_ss - y_init;
+    
+
+    % --- 1. Overshoot ---
+    y_max = max(y);
+    overshoot = ((y_max - y_ss) / abs(step_height)) * 100;
+
+    % --- 2. Rise Time (0% to 90%) ---
+    t10 = t(find(y >= y_init, 1));
+    t90 = t(find(y >= y_init + 0.9*step_height, 1));
+    rise_time = t90 - t10;
+
+    % --- 3. Settling Time (5%) ---
+    idx_settled = find(abs(y - y_ss) > 0.05 * abs(step_height), 1, 'last');
+    
+    if isempty(idx_settled)
+        settling_time = 0; % already within bounds
+    else
+        settling_time = t(idx_settled) - t(1);
+    end
+
+end
+
+function [sys, zeta, wn] = get_2nd_order_tf(Mp, tr, ts, K)
+% Inputs:
+%   Mp - Overshoot in percentage (e.g., 15 for 15%)
+%   ts - Settling time at 5% (seconds)
+%   tr - Rise time to 90% (seconds)
+% Outputs:
+%   sys  - The continuous-time transfer function object
+
+    % Default DC Gain to 1 if not provided
+    if nargin < 4
+        K = 1; 
+    end
+
+    % 1. Calculate Damping Ratio (zeta) from Overshoot
+    if Mp > 0
+        Mp_dec = Mp / 100;
+        zeta = -log(Mp_dec) / sqrt(pi^2 + log(Mp_dec)^2);
+    else
+        warning('Overshoot is <= 0. Assuming critically damped system (zeta = 1).');
+        zeta = 1;
+    end
+
+    % 2. Calculate Natural Frequency (wn) from 5% Settling Time
+    % Formula: ts = 3 / (zeta * wn)
+    wn_ts = 3 / (zeta * ts);
+
+    % 3. Calculate Natural Frequency (wn) from 10-90% Rise Time
+    % Using the standard empirical approximation for underdamped systems:
+    % tr = (0.8 + 2.5 * zeta) / wn
+    wn_tr = (0.8 + 2.5 * zeta) / tr;
+
+    % 4. Reconcile the Over-constrained system
+    % Average the two frequencies for a robust fit to experimental data
+    wn = (wn_ts + wn_tr) / 2;
+
+    % 5. Construct the Transfer Function
+    % G(s) = (K * wn^2) / (s^2 + 2*zeta*wn*s + wn^2)
+    num = K * wn^2;
+    den = [1, 2*zeta*wn, wn^2];
+    
+    sys = tf(num, den);
 end
