@@ -29,7 +29,8 @@ theta_op = 0; % 0 radians pitch
 psi_op = 0; % 0 radians yaw
 
 % Group numeric values corresponding to param_syms
-param_values = [m_num, g_num, dx_num, dy_num, dz_num, T_op, phi_op, theta_op, psi_op];
+param_values = [m_num, g_num, dx_num, dy_num, dz_num, T_op, phi_op, ...
+    theta_op, psi_op];
 
 %% 1.1 Simplified Nonlinear model
 % Based on the results of Project 1, obtain a simplified nonlinear model of
@@ -78,8 +79,7 @@ B = double(subs(B_sym, param_syms, param_values));
 % Design LQR controler
 qp = 50;
 qv = 1;
-r  = 10;
-
+r = 10;
 Q = [qp*eye(3),  zeros(3,3);
      zeros(3,3), qv*eye(3)];
 R_lqr = r * eye(3);
@@ -100,26 +100,34 @@ x_nonlin = zeros(6, N+1); % Nonlinear model state history
 % Input logging arrays
 u_a_log = zeros(3, N); % Log acceleration commands
 u_lambda_log = zeros(4, N); % Log physical commands [T; phi; theta; psi]
+x_ref_log = zeros(6, N);    % Log the moving reference target
 
 % Numeric Drag Matrix
 D_num = diag([dx_num, dy_num, dz_num]);
 
-% Target Reference (e.g., fly to x=1, y=1, z=2)
-p_ref = [1; 1; 2];
-
 % Simulation "time" loop
 for k = 1:N
-    % 1. Define step reference (Starts at t=1s)
+    % 1. Define dynamic trajectory reference (Starts at t=1s)
     if k*Dt >= 1.0
-        x_ref = [p_ref; 0; 0; 0];
+        % Time elapsed since the movement started
+        t_move = (k*Dt) - 1.0; 
+        
+        % Target Reference
+        % x_ref=[5; 5; 2; 0; 0; 0]; (e.g., fly to x=5, y=5, z=2)
+        x_bar_k=[5+1.5*t_move; 5; 2; 1.5; 0; 0]; % Fly at a constant 1.5 m/s
+        % in the X direction. Maintain 2m altitude.
     else
-        x_ref = zeros(6,1);
+        % Hovering at origin for the first 1 second
+        x_bar_k = zeros(6,1);
     end
+
+    % Log the reference so we can plot it later
+    x_ref_log(:, k) = x_bar_k;
     
     % =====================================================================
     % LINEAR SYSTEM SIMULATION
     % =====================================================================
-    e_x_lin = x_lin(:, k) - x_ref;    % State error
+    e_x_lin = x_lin(:, k) - x_bar_k;    % State error
     u_a_lin = -K * e_x_lin;           % LQR control law
     
     % Linear dynamics: dot_x = A*x + B*u
@@ -132,7 +140,7 @@ for k = 1:N
     % =====================================================================
     % NONLINEAR SYSTEM SIMULATION
     % =====================================================================
-    e_x_nonlin = x_nonlin(:, k) - x_ref; % State error
+    e_x_nonlin = x_nonlin(:, k) - x_bar_k; % State error
     u_a_cmd    = -K * e_x_nonlin;        % LQR equivalent acceleration cmd
     
     % Transform u_a into u_lamda
@@ -154,45 +162,250 @@ end
 x_lin(:, end)    = [];
 x_nonlin(:, end) = [];
 
+% ---------------- Plots for the state LQR --------------------------------
+
 % Plotting Results
 figure('Name', 'Closed-loop Trajectory', 'NumberTitle', 'off');
 
 % Plot X Position
 subplot(3,1,1);
-plot(t, x_lin(1,:), 'b-', t, x_nonlin(1,:), 'r--', 'LineWidth', 1.5);
-hold on; yline(p_ref(1), 'k:', 'Target');
+plot(t, x_lin(1,:), 'b-', t, x_nonlin(1,:), 'r--', t, x_ref_log(1,:), ...
+    'k:', 'LineWidth', 1.5);
 ylabel('$$p_x$$ (m)', 'Interpreter', 'latex');
-legend('Linear', 'Nonlinear', 'Location', 'best');
-title('Closed-loop Step Response (Position)'); grid on;
+legend('Linear', 'Nonlinear', 'Target', 'Location', 'best');
+title('Closed-loop Response (Position)'); grid on;
 
 % Plot Y Position
 subplot(3,1,2);
-plot(t, x_lin(2,:), 'b-', t, x_nonlin(2,:), 'r--', 'LineWidth', 1.5);
-hold on; yline(p_ref(2), 'k:', 'Target');
+plot(t, x_lin(2,:), 'b-', t, x_nonlin(2,:), 'r--', t, x_ref_log(2,:), ...
+    'k:', 'LineWidth', 1.5);
 ylabel('$$p_y$$ (m)', 'Interpreter', 'latex'); grid on;
 
 % Plot Z Position
 subplot(3,1,3);
-plot(t, x_lin(3,:), 'b-', t, x_nonlin(3,:), 'r--', 'LineWidth', 1.5);
-hold on; yline(p_ref(3), 'k:', 'Target');
+plot(t, x_lin(3,:), 'b-', t, x_nonlin(3,:), 'r--', t, x_ref_log(3,:), ...
+    'k:', 'LineWidth', 1.5);
 ylabel('$$p_z$$ (m)', 'Interpreter', 'latex');
 xlabel('Time [s]'); grid on;
 
-figure('Name', 'Nonlinear Actuation', 'NumberTitle', 'off');
 
-% Plot Thrust
-subplot(2,1,1);
-plot(t, u_lambda_log(1,:), 'g', 'LineWidth', 1.5);
-ylabel('Thrust (N)');
-title('Closed-loop Actuation Commands'); grid on;
+% 3D Trajectory Plot
+figure('Name', '3D Flight Trajectory', 'NumberTitle', 'off');
 
-% Plot Roll and Pitch Angles
-subplot(2,1,2);
-plot(t, rad2deg(u_lambda_log(2,:)), 'b', t, rad2deg(u_lambda_log(3,:)), 'r', 'LineWidth', 1.5);
-ylabel('Angle (deg)');
-legend('\phi (Roll)', '\theta (Pitch)', 'Location', 'best');
-xlabel('Time [s]'); grid on;
+% Plot the trajectories
+plot3(x_lin(1,:), x_lin(2,:), x_lin(3,:), 'b-', 'LineWidth', 1.5);
+hold on;
+plot3(x_nonlin(1,:), x_nonlin(2,:), x_nonlin(3,:), 'r--', 'LineWidth',...
+    1.5);
+plot3(x_ref_log(1,:), x_ref_log(2,:), x_ref_log(3,:), 'k:', 'LineWidth',...
+    1.5);
+% Add Start and End markers (Helps visualize the direction of flight)
+plot3(x_lin(1,1), x_lin(2,1), x_lin(3,1), 'go', 'MarkerSize', 8, ...
+    'MarkerFaceColor', 'g'); % Start Point
+plot3(x_ref_log(1,end), x_ref_log(2,end), x_ref_log(3,end), 'ro', ...
+    'MarkerSize', 8, 'MarkerFaceColor', 'r'); % Target End Point
+% Formatting and Labels
+grid on;
+xlabel('$$p_x$$ (m)', 'Interpreter', 'latex');
+ylabel('$$p_y$$ (m)', 'Interpreter', 'latex');
+zlabel('$$p_z$$ (m)', 'Interpreter', 'latex');
+title('3D Trajectory Tracking (Linear vs Nonlinear)');
+legend('Linear', 'Nonlinear', 'Target Path', 'Start', 'Final Target', ...
+    'Location', 'best');
+% Set the viewing angle
+view(-45, 30); % Sets a nice isometric viewing angle (Azimuth, Elevation)
+axis equal;
 
+
+% ---------------- Plots for LQR Actuation --------------------------------
+% figure('Name', 'Nonlinear Actuation', 'NumberTitle', 'off');
+% 
+% % Plot Thrust
+% subplot(2,1,1);
+% plot(t, u_lambda_log(1,:), 'g', 'LineWidth', 1.5);
+% ylabel('Thrust (N)');
+% title('Closed-loop Actuation Commands'); grid on;
+% 
+% % Plot Roll and Pitch Angles
+% subplot(2,1,2);
+% plot(t, rad2deg(u_lambda_log(2,:)), 'b', t, ...
+%    rad2deg(u_lambda_log(3,:)), 'r', 'LineWidth', 1.5);
+% ylabel('Angle (deg)');
+% legend('\phi (Roll)', '\theta (Pitch)', 'Location', 'best');
+% xlabel('Time [s]'); grid on;
+
+%% 1.5 Consider now an error state vector defined as ˜x = x - _x, where we 
+% assume that the reference state, _x, is driven by the same dynamics as x.
+% Obtain the equivalent state space model.
+
+A_err = A;
+B_err = B;
+
+%% 1.6 Design an LQR controller for this error model and test it in 
+% simulation. Comment on the difference between this linear model and the 
+% previous one.
+
+% Design error LQR controler
+qp_err = 50;
+qv_err = 1;
+r_err = 10;
+Q_err = [qp_err*eye(3),  zeros(3,3);
+     zeros(3,3), qv_err*eye(3)];
+R_lqr_err = r_err * eye(3);
+
+% Recalculate LQR gain
+[K_err, P_err, poles_err] = lqr(A_err, B_err, Q_err, R_lqr_err);
+
+% Closed-loop error dynamics: x_tilde_dot = (A - B*K) * x_tilde
+A_cl_err = A_err - B_err * K_err;
+
+% State-space
+C_err = [eye(3), zeros(3,3)]; % observe error state
+D_err = zeros(3,3);           % No direct feedthrough
+sys_cl_error = ss(A_cl_err, B_err, C_err, D_err);
+
+%----------------------------Test models-----------------------------------
+
+% Error state history
+x_tilde = zeros(6, N+1);
+% Actual state history
+x = zeros(6, N+1);
+% Reference state history
+x_bar = zeros(6, N);
+
+% Control input history
+u_a_err_log = zeros(3, N);
+
+% Initial condition
+x(:,1) = zeros(6,1);
+
+% x_tilde = x - x_bar
+x_tilde(:,1) = x(:,1)-x_bar(:,1);
+
+for k = 1:N
+    % Reference trajectory x_bar
+    if k*Dt >= 1.0
+        t_move = (k*Dt) - 1.0;
+        % Target Reference
+        % x_ref=[5; 5; 2; 0; 0; 0]; (e.g., fly to x=5, y=5, z=2)
+        % Fly at a constant 1.5 m/s in the X direction. Maintain 2m 
+        % altitude.
+        x_bar_k=[5+1.5*t_move; 5; 2; 1.5; 0; 0]; 
+    else
+        % Hover at origin
+        x_bar_k = zeros(6,1);
+    end
+
+    % Log reference
+    x_bar(:,k) = x_bar_k;
+
+    % Calculat error state
+    x_tilde(:,k) = x(:,k) - x_bar_k;
+
+    % LQR control law on the error model
+    u_a = -K_err * x_tilde(:,k);
+
+    % Error dynamics
+    % x_tilde_dot = (A - B*K)x_tilde
+    x_tilde_dot = A_cl_err * x_tilde(:,k);
+
+    % Integrate error dynamics
+    x_tilde(:,k+1) = x_tilde(:,k) + Dt * x_tilde_dot;
+
+    % Recover actual state from x = x_tilde + x_bar
+    x(:,k+1) = x_tilde(:,k+1) + x_bar_k;
+
+    % Log control input
+    u_a_err_log(:,k) = u_a;
+end
+
+% Remove extra sample
+x(:,end) = [];
+x_tilde(:,end) = [];
+
+% ---------------- Plots for the Error-Model LQR --------------------------
+
+figure('Name','Closed-loop Tracking Comparison','NumberTitle','off');
+
+% Plot X Position
+subplot(3,1,1);
+plot(t, x_lin(1,:), 'b-',  'LineWidth',1.5); hold on;
+plot(t, x_nonlin(1,:), 'r--', 'LineWidth',1.5);
+plot(t, x(1,:), 'g-.', 'LineWidth',1.5);
+plot(t, x_bar(1,:), 'k:',  'LineWidth',1.5);
+ylabel('$$p_x$$ (m)', 'Interpreter','latex');
+legend('Linear Model', ...
+       'Nonlinear Model', ...
+       'Error-State Linear Model', ...
+       'Reference Trajectory', ...
+       'Location','best');
+title('Trajectory Tracking Comparison');
+grid on;
+
+% Plot Y Position
+subplot(3,1,2);
+plot(t, x_lin(2,:), 'b-',  'LineWidth',1.5); hold on;
+plot(t, x_nonlin(2,:), 'r--', 'LineWidth',1.5);
+plot(t, x(2,:), 'g-.', 'LineWidth',1.5);
+plot(t, x_bar(2,:), 'k:',  'LineWidth',1.5);
+ylabel('$$p_y$$ (m)', 'Interpreter','latex');
+grid on;
+
+% Plot Z Position
+subplot(3,1,3);
+plot(t, x_lin(3,:), 'b-',  'LineWidth',1.5); hold on;
+plot(t, x_nonlin(3,:), 'r--', 'LineWidth',1.5);
+plot(t, x(3,:), 'g-.', 'LineWidth',1.5);
+plot(t, x_bar(3,:), 'k:',  'LineWidth',1.5);
+ylabel('$$p_z$$ (m)', 'Interpreter','latex');
+xlabel('Time [s]');
+grid on;
+
+
+% Error Plot
+
+figure('Name','Error-State Evolution','NumberTitle','off');
+
+subplot(3,1,1);
+plot(t, x_tilde(1,:), 'LineWidth',1.5);
+ylabel('$$\tilde{p}_x$$ (m)','Interpreter','latex');
+title('Error-State Convergence');
+grid on;
+
+subplot(3,1,2);
+plot(t, x_tilde(2,:), 'LineWidth',1.5);
+ylabel('$$\tilde{p}_y$$ (m)','Interpreter','latex');
+grid on;
+
+subplot(3,1,3);
+plot(t, x_tilde(3,:), 'LineWidth',1.5);
+ylabel('$$\tilde{p}_z$$ (m)','Interpreter','latex');
+xlabel('Time [s]');
+grid on;
+
+
+% 3D Tracking Plot
+
+figure('Name','3D Error-Model Tracking','NumberTitle','off');
+
+plot3(x(1,:), x(2,:), x(3,:), 'b', 'LineWidth',1.5);
+hold on;
+plot3(x_bar(1,:), x_bar(2,:), x_bar(3,:), 'k:', 'LineWidth',1.5);
+% Start point
+plot3(x(1,1), x(2,1), x(3,1), 'go', 'MarkerSize',8, 'MarkerFaceColor','g');
+% Final reference point
+plot3(x_bar(1,end), x_bar(2,end), x_bar(3,end), 'ro', 'MarkerSize',8, ...
+    'MarkerFaceColor','r');
+grid on;
+axis equal;
+xlabel('$$p_x$$ (m)','Interpreter','latex');
+ylabel('$$p_y$$ (m)','Interpreter','latex');
+zlabel('$$p_z$$ (m)','Interpreter','latex');
+title('3D Trajectory Tracking with Error-State LQR');
+legend('Actual Trajectory $$x$$', 'Reference Trajectory $$\bar{x}$$', ...
+       'Start', 'Final Reference', 'Interpreter','latex', 'Location', ...
+       'best');
+view(-45,30);
 %% ========================================================================
 % Functions
 % =========================================================================
@@ -210,7 +423,7 @@ function dX = drone_nonlinear_dynamics(X, u_lambda, m, g, D)
     % Z-Y-X Euler Rotation
     R = [cos(theta)*cos(psi), sin(phi)*sin(theta)*cos(psi) - cos(phi)*sin(psi), cos(phi)*sin(theta)*cos(psi) + sin(phi)*sin(psi);
          cos(theta)*sin(psi), sin(phi)*sin(theta)*sin(psi) + cos(phi)*cos(psi), cos(phi)*sin(theta)*sin(psi) - sin(phi)*cos(psi);
-         -sin(theta)        , sin(phi)*cos(theta)                             , cos(phi)*cos(theta)                              ];
+         -sin(theta) , sin(phi)*cos(theta) , cos(phi)*cos(theta)];
          
     dp = v; 
     dv = ([0;0;-m*g] - R*D*R'*v + R*[0;0;T]) / m;
