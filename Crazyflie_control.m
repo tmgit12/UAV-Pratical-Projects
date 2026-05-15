@@ -266,28 +266,24 @@ sys_cl_error = ss(A_cl_err, B_err, C_err, D_err);
 
 %----------------------------Test models-----------------------------------
 
-% Error state history
-x_tilde = zeros(6, N+1);
-% Actual state history
-x = zeros(6, N+1);
-% Reference state history
-x_bar = zeros(6, N);
 
-% Control input history
-u_a_err_log = zeros(3, N);
+x_tilde = zeros(6, N); % Error state history
+x_bar = zeros(6, N); % Reference state history
+x = zeros(6, N+1); % Actual state history
 
-% Initial condition
-x(:,1) = zeros(6,1);
+u_a_tilde_log = zeros(3, N); % Control input history
 
-% x_tilde = x - x_bar
-x_tilde(:,1) = x(:,1)-x_bar(:,1);
+x(:,1) = zeros(6,1); % Initial condition
+
+x_tilde(:,1) = x(:,1)-x_bar(:,1); % x_tilde = x - x_bar
 
 for k = 1:N
     % Reference trajectory x_bar
     if k*Dt >= 1.0
         t_move = (k*Dt) - 1.0;
-        % Target Reference
-        % x_ref=[5; 5; 2; 0; 0; 0]; (e.g., fly to x=5, y=5, z=2)
+        % Target Reference (e.g., fly to x=5, y=5, z=2)
+        % x_ref=[5; 5; 2; 0; 0; 0]; 
+
         % Fly at a constant 1.5 m/s in the X direction. Maintain 2m 
         % altitude.
         x_bar_k=[5+1.5*t_move; 5; 2; 1.5; 0; 0]; 
@@ -303,11 +299,12 @@ for k = 1:N
     x_tilde(:,k) = x(:,k) - x_bar_k;
 
     % LQR control law on the error model
-    u_a = -K_err * x_tilde(:,k);
+    u_a_tilde = -K_err * x_tilde(:,k);
 
     % Error dynamics
     % x_tilde_dot = (A - B*K)x_tilde
-    x_tilde_dot = A_cl_err * x_tilde(:,k);
+    x_tilde_dot = A * x_tilde(:, k) + B * u_a_tilde;
+    %x_tilde_dot = A_cl_err * x_tilde(:,k);
 
     % Integrate error dynamics
     x_tilde(:,k+1) = x_tilde(:,k) + Dt * x_tilde_dot;
@@ -316,12 +313,12 @@ for k = 1:N
     x(:,k+1) = x_tilde(:,k+1) + x_bar_k;
 
     % Log control input
-    u_a_err_log(:,k) = u_a;
+    u_a_tilde_log(:,k) = u_a_tilde;
 end
 
 % Remove extra sample
-x(:,end) = [];
-x_tilde(:,end) = [];
+ x(:,end) = [];
+ x_tilde(:,end) = [];
 
 % ---------------- Plots for the Error-Model LQR --------------------------
 
@@ -406,6 +403,121 @@ legend('Actual Trajectory $$x$$', 'Reference Trajectory $$\bar{x}$$', ...
        'Start', 'Final Reference', 'Interpreter','latex', 'Location', ...
        'best');
 view(-45,30);
+
+%% 2.1 Design a nonlinear controller with actuation in body accelerations, 
+% u_a \in R^3 and assuming a zero yaw, that is able to achieve asymptotic 
+% stability in the Lyapunov sense (prove this result).
+
+Kp_mat = diag([10, 10, 15]); % Position error gains
+Kv_mat = diag([5, 5, 8]);
+
+%% 2.2 Test this controller in simulation and compare with the previous 
+% linear controller.
+
+x_lyap = zeros(6, N); % Nonlinear model state history
+x_tilde = zeros(6, N); % Error state history x_tilde = x - x_bar
+x_bar = zeros(6, N); % Reference state history
+
+
+% Input logging arrays
+u_a_log = zeros(3, N); % Log acceleration commands
+u_lambda_log = zeros(4, N); % Log physical commands [T; phi; theta; psi]
+x_ref_log = zeros(6, N);    % Log the moving reference target
+
+for k = 1:N
+    % Reference trajectory x_bar
+    if k*Dt >= 1.0
+        t_move = (k*Dt) - 1.0;
+        % Target Reference
+        % x_ref=[5; 5; 2; 0; 0; 0]; (e.g., fly to x=5, y=5, z=2)
+        % Fly at a constant 1.5 m/s in the X direction. Maintain 2m 
+        % altitude.
+        x_bar_k=[5+1.5*t_move; 5; 2; 1.5; 0; 0]; 
+    else
+        % Hover at origin
+        x_bar_k = zeros(6,1);
+    end
+
+    % Log reference
+    x_bar(:,k) = x_bar_k;
+
+    % Calculat error state
+    x_tilde(:,k) = x_lyap(:,k) - x_bar_k;
+    e_p = x_tilde(1:3, k); % Position error
+    e_v = x_tilde(4:6, k); % Velocity error
+
+    v_current = x_lyap(4:6, k);
+
+    if k == 1
+        R_current = eye(3);
+    else
+        % Z-Y-X Euler Rotation from previous u_lambda
+        phi=u_lambda(2);
+        theta=u_lambda(3);
+        psi=0;
+        R_current = [cos(theta)*cos(psi), sin(phi)*sin(theta)*cos(psi) - cos(phi)*sin(psi), cos(phi)*sin(theta)*cos(psi) + sin(phi)*sin(psi);
+         cos(theta)*sin(psi), sin(phi)*sin(theta)*sin(psi) + cos(phi)*cos(psi), cos(phi)*sin(theta)*sin(psi) - sin(phi)*cos(psi);
+         -sin(theta) , sin(phi)*cos(theta) , cos(phi)*cos(theta)];        
+    end
+
+    dot_v_current = [0; 0; 0];
+
+    % NONLINEAR CONTROL LAW
+    % u_a = a_ref + (R*D*R'*v)/m - Kp*e_p - Kv*e_v 
+    u = - (Kp_mat * e_p) - (Kv_mat * e_v);
+    u_a_cmd = dot_v_current + (R_current * D_num * R_current' * v_current)/m_num + u ;
+
+    u_lambda = u_aTOu_lambda(u_a_cmd, m_num, g_num);
+    dot_x_nonlin = drone_nonlinear_dynamics(x_lyap(:, k), u_lambda, m_num, g_num, D_num);
+    x_lyap(:, k+1) = x_lyap(:, k) + Dt * dot_x_nonlin;
+end
+
+% Remove extra sample
+%x(:,end) = [];
+x_lyap(:,end) = [];
+
+% ---------------- Plots for the Model Comparisons ------------------------
+figure('Name','Closed-loop Tracking Comparison','NumberTitle','off');
+
+% Plot X Position
+subplot(3,1,1);
+plot(t, x_lin(1,:), 'b-',  'LineWidth',1.5); hold on;
+plot(t, x_nonlin(1,:), 'r--', 'LineWidth',1.5);
+plot(t, x(1,:), 'g-.', 'LineWidth',1.5);
+plot(t, x_lyap(1,:), 'm-', 'LineWidth',1.5); % <--- NEW: Lyapunov Model
+plot(t, x_bar(1,:), 'k:',  'LineWidth',1.5);
+ylabel('$$p_x$$ (m)', 'Interpreter','latex');
+% Updated Legend
+legend('Linear Model (LQR)', ...
+       'Nonlinear Model (LQR)', ...
+       'Error-State Linear (LQR)', ...
+       'Nonlinear Model (Lyapunov)', ...
+       'Reference Trajectory', ...
+       'Location','best');
+title('Trajectory Tracking Comparison');
+grid on;
+
+% Plot Y Position
+subplot(3,1,2);
+plot(t, x_lin(2,:), 'b-',  'LineWidth',1.5); hold on;
+plot(t, x_nonlin(2,:), 'r--', 'LineWidth',1.5);
+plot(t, x(2,:), 'g-.', 'LineWidth',1.5);
+plot(t, x_lyap(2,:), 'm-', 'LineWidth',1.5); % <--- NEW: Lyapunov Model
+plot(t, x_bar(2,:), 'k:',  'LineWidth',1.5);
+ylabel('$$p_y$$ (m)', 'Interpreter','latex');
+grid on;
+
+% Plot Z Position
+subplot(3,1,3);
+plot(t, x_lin(3,:), 'b-',  'LineWidth',1.5); hold on;
+plot(t, x_nonlin(3,:), 'r--', 'LineWidth',1.5);
+plot(t, x(3,:), 'g-.', 'LineWidth',1.5);
+plot(t, x_lyap(3,:), 'm-', 'LineWidth',1.5); % <--- NEW: Lyapunov Model
+plot(t, x_bar(3,:), 'k:',  'LineWidth',1.5);
+ylabel('$$p_z$$ (m)', 'Interpreter','latex');
+xlabel('Time [s]');
+grid on;
+
 %% ========================================================================
 % Functions
 % =========================================================================
@@ -482,4 +594,10 @@ function u_lambda = u_aTOu_lambda(u_a, m, g)
     theta = max(min(theta, max_angle), -max_angle);
     
     u_lambda = [T; phi; theta; 0]; % Yaw is zero
+end
+
+%--------------------------------------------------------------------------
+% For 2.1
+function u_a_nonlinear = u_a_nonlinear(u_a, m, g)
+    
 end
