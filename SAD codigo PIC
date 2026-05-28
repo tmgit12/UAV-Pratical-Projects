@@ -1,0 +1,726 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <xc.h>
+#include "p24fj1024gb610.h"
+
+#define MAX_SAMPLES 10
+#define RX_BUFFER_SIZE  256
+#pragma config FWDTEN = OFF
+
+// =============================================================================
+//  UART RX buffer
+// =============================================================================
+volatile char rx_circ_buf[RX_BUFFER_SIZE];
+volatile int  rx_head      = 0;   // next write position (ISR, Interrupt Service Routine)
+volatile int  rx_tail      = 0;   // next read  position (main)
+volatile int  rx_line_ready = 0;  // set to 1 by ISR when '\r' or '\n' seen
+
+volatile unsigned char time_to_sample = 0;
+volatile int timer_ticks = 0;
+
+int samples_per_msg = 1;  //  1 by default
+int virtual_channel_on = 0;     // 0 = RD6/RD7 separados, 1 = DV ativo, 0 by default
+int RA7_input = 0; // 1 is input, 0 is output, 1/input by default
+int sampling_period_seconds = 2;  // 2 by default
+
+// flags dos canais monitorizados
+int sample_Ax = 1;
+int sample_Ay = 1;
+int sample_Az = 1;
+int sample_D6 = 0;
+int sample_D7 = 0;
+int sample_DB = 0;
+int sample_DV = 1;
+int sample_Ard = 0;
+
+// Alerta para DV
+int alert_value_dv = 3; // 3 by default
+int alert_active_dv = 0;
+
+int virtual_value = 0;
+int saved_virtual_value = 0;
+
+int (*buttons_handler)(void);
+
+// Buffers
+int Pot_buffer[MAX_SAMPLES];
+int Temp_buffer[MAX_SAMPLES];
+int Sensor3_buffer[MAX_SAMPLES];
+int D6_buffer[MAX_SAMPLES];
+int D7_buffer[MAX_SAMPLES];
+int DB_buffer[MAX_SAMPLES];
+int DV_buffer[MAX_SAMPLES];
+int Ard_A0_buffer[MAX_SAMPLES];
+int Ard_A1_buffer[MAX_SAMPLES];
+
+// Protótipos
+void Digital_channel_RA7(int isInput);
+int buttons_virtual_off(void);
+int buttons_virtual_on(void);
+void process_command(char *json);
+void UART1_write_int_array(const char *name, int *buffer, int n, int *first_field);
+void send_dv_alert(int dv_value);
+int  rx_get_line(char *out, int max_len);
+
+// =============================================================================
+// Digital I/O setup
+// =============================================================================
+
+void Digital_inputs_setup(void) {
+    ANSD = 0x0000;
+    TRISDbits.TRISD6 = 1;
+    TRISDbits.TRISD7 = 1;
+}
+
+void Digital_outputs_setup(void) {
+    ANSA = 0x0000; // Port A pins digital
+
+    // RA4, RA5, RA6 as outputs
+    TRISAbits.TRISA4 = 0;
+    TRISAbits.TRISA5 = 0;
+    TRISAbits.TRISA6 = 0;
+
+    // Initialize them to OFF (0)
+    LATAbits.LATA4 = 0;
+    LATAbits.LATA5 = 0;
+    LATAbits.LATA6 = 0;
+}
+
+void Digital_channel_RA7(int isInput) {
+    ANSAbits.ANSA7 = 0;
+    TRISAbits.TRISA7 = isInput;
+    
+    // Enable internal pull-up if configured as an input
+    if (isInput == 1) {
+        CNPUAbits.CNPUA7 = 1; 
+    } else {
+        CNPUAbits.CNPUA7 = 0;
+    }
+}
+
+// =============================================================================
+// UART1 setup
+// =============================================================================
+
+void UART1_setup(void) {
+    __builtin_write_OSCCONL(OSCCON & 0xbf);
+
+    RPOR8bits.RP17R   = 0x0003;
+    RPINR18bits.U1RXR = 0x000A;
+
+    U1BRG = 25/2;   // confirmar com FCY real
+
+    U1MODE = 0x8000;
+    U1STA  = 0x0400;
+
+    IEC0bits.U1TXIE = 0;
+ 
+    // --- UART RX interrupt setup ---------------------------------------------
+    IFS0bits.U1RXIF = 0;   // clear pending flag before enabling
+    IEC0bits.U1RXIE = 1;   // enable UART1 RX interrupt  (was 0)
+    IPC2bits.U1RXIP = 4;   // priority 4 (higher than Timer1 = 1)
+    // -------------------------------------------------------------------------
+}
+
+// =============================================================================
+// UART1 RX Interrupt Service Routine
+// =============================================================================
+/*
+ * Triggered every time the UART1 receiver has a character ready.
+ * Stores the character in the buffer.  When a line terminator
+ * ('\r' or '\n') is received, sets rx_line_ready so the main loop can
+ * extract and process the complete command.
+ */
+void __attribute__((__interrupt__, __auto_psv__)) _U1RXInterrupt(void) {
+    
+    // Store all characters waiting
+    while (U1STAbits.URXDA) {
+        char c = U1RXREG; // read clears URXDA
+        
+        int next_head = (rx_head + 1) % RX_BUFFER_SIZE;
+        
+        // store only if buffer not full
+        if (next_head != rx_tail) { 
+            rx_circ_buf[rx_head] = c;
+            rx_head = next_head;
+        }
+        
+        /* even if buffer was full, detect end-of-line so main doesn't stall */
+        if (c == '\r' || c == '\n') {
+            rx_line_ready = 1;
+        }
+    }
+    
+    // If characters arrived too fast clear the error
+    if (U1STAbits.OERR) {
+        U1STAbits.OERR = 0; 
+    }
+    
+    IFS0bits.U1RXIF = 0; // clear interrupt flag
+}
+
+
+// =============================================================================
+// rx_get_line extract line from the buffer
+// =============================================================================
+/* Copies characters from rx_circ_buf into 'out' until a '\r', '\n', or
+ * '\0' is found, or max_len-1 characters have been copied.
+ * Advances rx_tail past the terminator.
+ * Returns 1 if a non-empty line was extracted, 0 otherwise.
+ */
+int rx_get_line(char *out, int max_len) {
+    int i = 0;
+ 
+    while (rx_tail != rx_head && i < max_len - 1) {
+        char c = rx_circ_buf[rx_tail];
+        rx_tail = (rx_tail + 1) % RX_BUFFER_SIZE;
+ 
+        if (c == '\r' || c == '\n' || c == '\0') {
+            break; // end of line found
+        }
+        out[i++] = c;
+    }
+ 
+    out[i] = '\0';
+    return (i > 0); // 1 = valid line, 0 = empty
+} 
+
+// =============================================================================
+// UART helpers
+// =============================================================================
+
+void UART1_write_car(char car) {
+    while (U1STAbits.UTXBF) {}
+    U1TXREG = car;
+}
+
+void UART1_write_str(char* string) {
+    int i = 0;
+    while (string[i] != '\0') {
+        UART1_write_car(string[i]);
+        i++;
+    }
+}
+
+/* Kept for completeness; no longer called from the main loop because
+   reception is now fully interrupt-driven via the circular buffer.      */
+
+char UART1_read_car(void) {
+    while (!U1STAbits.URXDA) {}
+    return U1RXREG;
+}
+
+void UART1_read_str(char* buffer, int max_length) {
+    int i = 0;
+    char c = 0;
+
+    while (i < max_length - 1) {
+        c = UART1_read_car();
+
+        if (c == '\r' || c == '\n') {
+            break;
+        }
+
+        buffer[i] = c;
+        i++;
+        UART1_write_car(c);
+    }
+
+    buffer[i] = '\0';
+}
+
+// =============================================================================
+// ADC
+// =============================================================================
+
+void ADC_setup(void) {
+    AD1CON1bits.ADON = 0;
+
+    ANSBbits.ANSB3 = 1;
+    ANSBbits.ANSB4 = 1;
+    ANSBbits.ANSB5 = 1;
+
+    TRISBbits.TRISB3 = 1;
+    TRISBbits.TRISB4 = 1;
+    TRISBbits.TRISB5 = 1;
+
+    AD1CON3bits.ADCS = 0x01;
+    AD1CON1bits.ADON = 1;
+}
+
+int ADC_Read(int channel) {
+    volatile int i;
+
+    AD1CHS = channel;
+
+    AD1CON1bits.SAMP = 1;
+    for (i = 0; i < 1000; i++) Nop();
+    AD1CON1bits.SAMP = 0;
+
+    while (!AD1CON1bits.DONE);
+
+    return ADC1BUF0;
+}
+
+// =============================================================================
+// Timer
+// =============================================================================
+
+void Timer1_setup(void) {
+    T1CON = 0x00;
+    TMR1  = 0x00;
+
+    PR1 = 7811;   // ~1 segundo, assumindo FCY = 2 MHz e prescaler 1:256
+
+    T1CONbits.TCKPS = 0b11;
+    T1CONbits.TCS   = 0;
+
+    IPC0bits.T1IP = 0x01;
+    IFS0bits.T1IF = 0;
+    IEC0bits.T1IE = 1;
+    T1CONbits.TON = 1;
+}
+
+void __attribute__((__interrupt__, __shadow__)) _T1Interrupt(void) {
+    timer_ticks++;
+
+    if (timer_ticks >= sampling_period_seconds) {
+        time_to_sample = 1;
+        timer_ticks = 0;
+    }
+
+    IFS0bits.T1IF = 0;
+}
+
+// =============================================================================
+// Helpers JSON
+// =============================================================================
+
+void UART1_write_int_array(const char *name, int *buffer, int n, int *first_field) {
+    char str[32];
+    int i;
+
+    if (!(*first_field)) {
+        UART1_write_str(",");
+    }
+
+    UART1_write_str("\"");
+    UART1_write_str((char*)name);
+    UART1_write_str("\":[");
+
+    for (i = 0; i < n; i++) {
+        sprintf(str, "%d", buffer[i]);
+        UART1_write_str(str);
+
+        if (i < n - 1) {
+            UART1_write_str(",");
+        }
+    }
+
+    UART1_write_str("]");
+    *first_field = 0;
+}
+
+// Formato da mensagem de alerta
+void send_dv_alert(int dv_value) {
+    char str[96];
+    sprintf(str, "{\"type\":\"alert\",\"channel\":\"DV\",\"value\":%d}\r\n", dv_value);
+    UART1_write_str(str);
+}
+
+// =============================================================================
+// Processamento de comandos
+// =============================================================================
+/* Single-key commands:
+ *     {"v":<0|1>}    - virtual channel on/off
+ *     {"av":<0-3>}   - DV alert threshold
+ *     {"n":<1-10>}   - samples per message
+ *     {"b":<0|1>}    - RA7 direction (0=output, 1=input)
+ *     {"Dw":<0-7>}   - write bits to RA0/RA1/RA2
+ *     {"p":<s>}      - sampling period in seconds
+ *     {"Ard":<0|1>}  - enable/disable Arduino I2C channels
+ *
+ *   Channel configuration ? single OR multi-key, any combination:
+ *     {"Ax":<0|1>}
+ *     {"Ax":<0|1>,"Ay":<0|1>,"Az":<0|1>,"D6":<0|1>,"D7":<0|1>,"DB":<0|1>,"DV":<0|1>}
+ *     (any subset of the seven channel keys is accepted in one message)
+ *
+ * For the channel block, each key is located with strstr() and parsed
+ * independently with sscanf() starting from that position, so any
+ * combination of keys and any key order is handled correctly.
+ */
+ 
+/* parse_key: find "key": in json and read the integer that follows.
+ * Returns 1 on success and stores the value in *out; returns 0 if the
+ * key is not present or the value cannot be read.
+ * Usage: parse_key(json, "\"Ax\"", &value)
+ */
+
+static int parse_key(const char *json, const char *key, int *out) {
+    char *pos = strstr(json, key);
+    if (pos == NULL) return 0;
+ 
+    /* advance past the key to the colon, then read the integer */
+    pos += strlen(key);
+    while (*pos == ' ' || *pos == ':') pos++;   /* skip whitespace and ':' */
+ 
+    return (sscanf(pos, "%d", out) == 1);
+}
+
+void process_command(char *json) {
+    char echo[140];
+    sprintf(echo, "CMD:%s\r\n", json);
+    UART1_write_str(echo);
+    int value = 0;
+ 
+    // --- Virtual channel on/off --------------------------------------------
+    // Guard: must contain "v" but NOT "Ax" (to avoid matching channel msgs)
+    if (strstr(json, "\"v\"") != NULL &&
+        strstr(json, "\"Ax\"") == NULL) {
+        if (sscanf(json, "{\"v\":%d}", &value) == 1) {
+            virtual_channel_on = value;
+ 
+            if (virtual_channel_on == 0) {
+                buttons_handler = buttons_virtual_off;
+                sample_DV       = 0;
+                alert_active_dv = 0;
+            } else {
+                buttons_handler = buttons_virtual_on;
+            }
+        }
+    }
+ 
+    // --- DV alert threshold ------------------------------------------------
+    else if (strstr(json, "\"av\"") != NULL) {
+        if (sscanf(json, "{\"av\":%d}", &value) == 1) {
+            if (value >= 0 && value <= 3) {
+                alert_value_dv  = value;
+                alert_active_dv = 0;
+            }
+        }
+    }
+ 
+    // --- Samples per message -----------------------------------------------
+    else if (strstr(json, "\"n\"") != NULL) {
+        if (sscanf(json, "{\"n\":%d}", &value) == 1) {
+            if (value > 0 && value <= MAX_SAMPLES) {
+                samples_per_msg = value;
+            }
+        }
+    }
+ 
+    // --- RA7 direction -----------------------------------------------------
+    else if (strstr(json, "\"b\"") != NULL) {
+        if (sscanf(json, "{\"b\":%d}", &value) == 1) {
+            Digital_channel_RA7(value);
+            RA7_input = value;
+            
+            // Apply last DB state to    the LED
+            if (RA7_input == 0) {
+                LATAbits.LATA7 = sample_DB; 
+            }
+        }
+    }
+ 
+    // --- Digital write RA4/RA5/RA6 -----------------------------------------
+    else if (strstr(json, "\"Dw\"") != NULL) {
+        if (sscanf(json, "{\"Dw\":%d}", &value) == 1) {
+            // Mask out (clear) bits 4, 5, and 6 using ~0x0070
+            // Shift the 3-bit value (0 to 7) left by 4 to align with RA4-RA6
+            LATA = (LATA & ~0x0070) | ((value << 4) & 0x0070);
+        }
+    }
+ 
+    // --- Sampling period ---------------------------------------------------
+    else if (strstr(json, "\"p\"") != NULL) {
+        if (sscanf(json, "{\"p\":%d}", &value) == 1) {
+            if (value > 0) {
+                sampling_period_seconds = value;
+                timer_ticks = 0;
+            }
+        }
+    }
+ 
+    // --- Arduino I2C channels ----------------------------------------------
+    else if (strstr(json, "\"Ard\"") != NULL) {
+        if (sscanf(json, "{\"Ard\":%d}", &value) == 1) {
+            sample_Ard = value;
+        }
+    }
+ 
+    // --- Channel enable/disable (single-key OR multi-key) ------------------
+    /*
+     * This branch handles any message that contains at least one channel key
+     * (Ax, Ay, Az, D6, D7, DB, DV), whether sent individually or combined:
+     *
+     *   Single:  {"Ax":0}
+     *   Multi:   {"Ax":1,"Ay":0,"Az":0,"D6":0,"D7":0,"DB":1,"DV":1}
+     *   Partial: {"D6":1,"DB":1}
+     *
+     * parse_key() locates each key independently so key order and the
+     * presence of other keys do not matter. Only keys that are found in
+     * the message are updated; the rest keep their current value.
+     */
+    else if (strstr(json, "\"Ax\"") != NULL ||
+             strstr(json, "\"Ay\"") != NULL ||
+             strstr(json, "\"Az\"") != NULL ||
+             strstr(json, "\"D6\"") != NULL ||
+             strstr(json, "\"D7\"") != NULL ||
+             strstr(json, "\"DB\"") != NULL ||
+             strstr(json, "\"DV\"") != NULL) {
+ 
+        if (parse_key(json, "\"Ax\"", &value)) sample_Ax = value;
+        if (parse_key(json, "\"Ay\"", &value)) sample_Ay = value;
+        if (parse_key(json, "\"Az\"", &value)) sample_Az = value;
+        if (parse_key(json, "\"D6\"", &value)) sample_D6 = value;
+        if (parse_key(json, "\"D7\"", &value)) sample_D7 = value;
+        
+        if (parse_key(json, "\"DB\"", &value)) {
+            sample_DB = value;
+            if (RA7_input == 0) {
+                LATAbits.LATA7 = sample_DB; // Drive the LED D10 physically
+            }
+        }
+ 
+        // DV respects virtual_channel_on: ignored if virtual channel is off
+        if (parse_key(json, "\"DV\"", &value)) {
+            sample_DV = (virtual_channel_on == 1) ? value : 0;
+        }
+    }
+}
+
+// =============================================================================
+// Virtual channel
+// =============================================================================
+
+int buttons_virtual_off(void) {
+    return 0;
+}
+
+int buttons_virtual_on(void) {
+    int d6 = !PORTDbits.RD6;
+    int d7 = !PORTDbits.RD7;
+
+    return (d7 << 1) | d6;
+}
+// =============================================================================
+// I2C2 Master Functions
+// =============================================================================
+
+void I2C2_setup(void) {
+    I2C2CONLbits.I2CEN = 0;  // Disable I2C2 to configure it
+    
+    // Calculate Baud Rate Generator (BRG) for 100kHz.
+    // Assuming FCY = 2 MHz (from your Timer1 setup): 
+    // I2C2BRG = (FCY / 100000) - (FCY / 10000000) - 1 = 19
+    I2C2BRG = 19; 
+    
+    I2C2CONLbits.I2CEN = 1;  // Enable I2C2
+}
+
+void I2C2_Start(void) {
+    I2C2CONLbits.SEN = 1;         // Initiate Start condition
+    while(I2C2CONLbits.SEN == 1); // Wait for Start to complete
+}
+
+void I2C2_Stop(void) {
+    I2C2CONLbits.PEN = 1;         // Initiate Stop condition
+    while(I2C2CONLbits.PEN == 1); // Wait for Stop to complete
+}
+
+void I2C2_Write(unsigned char data) {
+    I2C2TRN = data;                  // Load data into transmit register
+    //I2C2STATbits.TBF = 1;
+    while(I2C2STATbits.TRSTAT == 1); // Wait for transmission to complete
+    //I2C2STAT.TBF = 0;
+}
+// receber endreço, dar shift e adicionar o objetivo ler ou escrever
+unsigned char I2C2_Read(int ack) {
+    I2C2CONLbits.RCEN = 1;           // Enable receive mode
+    while(I2C2STATbits.RBF == 0);   // Wait until buffer is full
+    unsigned char data = I2C2RCV;   // Read the data
+    
+    // 0 = ACK (Send more data), 1 = NACK (Stop sending)
+    I2C2CONLbits.ACKDT = ack;        
+    I2C2CONLbits.ACKEN = 1;          // Initiate ACK/NACK sequence
+    while(I2C2CONLbits.ACKEN == 1);  // Wait for ACK to complete
+    
+    return data;
+}
+
+int read_Arduino_Sensors(int *a0_val, int *a1_val) {
+    // Send the command 0xAC to the Arduino (slave address 0x48)
+    I2C2_Start();
+    I2C2_Write(0x48 << 1); // 0x90: Arduino address shifted left + Write bit (0)
+    
+    if (I2C2STATbits.ACKSTAT == 1) { // If Arduino didn't acknowledge
+        I2C2_Stop();
+        return -2; // Communication failed
+    }
+    
+    
+    I2C2_Write(0xAC); // Send the specific trigger command
+    I2C2_Stop();
+
+    // Small delay to allow Arduino to process the analogRead()
+    volatile int d;
+    for(d = 0; d < 10000; d++) Nop(); 
+
+    // Request 5 bytes back from the Arduino (1 header + 2 bytes A0 + 2 bytes A1)
+    I2C2_Start();
+    I2C2_Write((0x48 << 1) | 1); // 0x91: Arduino address + Read bit (1)
+    
+    if (I2C2STATbits.ACKSTAT == 1) { 
+        I2C2_Stop();
+        return -3; 
+    }
+
+    
+    // Read the 5 bytes. Send ACK (0) for first 4, NACK (1) for the last one.
+    unsigned char b0 = I2C2_Read(0); 
+    unsigned char b1 = I2C2_Read(0);
+    unsigned char b2 = I2C2_Read(0);
+    unsigned char b3 = I2C2_Read(0);
+    unsigned char b4 = I2C2_Read(1); 
+    I2C2_Stop();
+
+    // Verify the header and reconstruct the 16-bit integers
+    if (b0 == 0x40) {
+        *a0_val = (b1 << 8) | b2; // Combine High and Low bytes
+        *a1_val = (b3 << 8) | b4;
+        return 0; // Success
+    }
+    
+    return -1; // Wrong header received
+}
+
+// =============================================================================
+// Main
+// =============================================================================
+
+int main(int argc, char** argv) {
+    char str_recieved[128];
+    int sample_index = 0;
+    int first_field;
+    int current_dv;
+
+    UART1_setup();
+    ADC_setup();
+    Timer1_setup();
+    I2C2_setup();
+    Digital_inputs_setup();
+    Digital_outputs_setup();
+    Digital_channel_RA7(RA7_input);
+
+    if (virtual_channel_on == 0) {
+        buttons_handler = buttons_virtual_off;
+        sample_DV = 0;   // AJUSTE: coerência inicial
+    } else {
+        buttons_handler = buttons_virtual_on;
+    }
+
+    while (1) {
+        /* -----------------------------------------------------------------
+         * UART command reception is interrupt-driven.
+         * The ISR fills rx_circ_buf and sets rx_line_ready when a full
+         * line has arrived.  The main loop only acts when that flag is set,
+         * so it never blocks waiting for characters.
+         * ----------------------------------------------------------------- */
+        if (rx_line_ready) {
+            rx_line_ready = 0;
+            if (rx_get_line(str_recieved, sizeof(str_recieved))) {
+                process_command(str_recieved);
+            }
+
+            // Check if another complete line is already waiting in the buffer
+            int i = rx_tail;
+            while (i != rx_head) {
+                if (rx_circ_buf[i] == '\n' || rx_circ_buf[i] == '\r') {
+                    rx_line_ready = 1;   // signal another line is ready
+                    break;
+                }
+                i = (i + 1) % RX_BUFFER_SIZE;
+            }
+        }
+ 
+        virtual_value = buttons_handler();
+ 
+        if (time_to_sample == 1) {
+            saved_virtual_value = virtual_value;
+ 
+            if (sample_Ax) Pot_buffer[sample_index]    = ADC_Read(5);
+            if (sample_Ay) Temp_buffer[sample_index]   = ADC_Read(4);
+            if (sample_Az) Sensor3_buffer[sample_index] = ADC_Read(3);
+ 
+            if (sample_Ard) {
+                int a0 = 0, a1 = 0;
+                int Ard = read_Arduino_Sensors(&a0, &a1);
+                if (Ard == 0) {
+                    Ard_A0_buffer[sample_index] = a0;
+                    Ard_A1_buffer[sample_index] = a1;
+                } else {
+                    Ard_A0_buffer[sample_index] = Ard;
+                    Ard_A1_buffer[sample_index] = Ard;
+                }
+            }
+
+ 
+            if (sample_D6) D6_buffer[sample_index] = !PORTDbits.RD6;
+            if (sample_D7) D7_buffer[sample_index] = !PORTDbits.RD7;
+ 
+            if (sample_DB && RA7_input == 1) {
+                DB_buffer[sample_index] = !PORTAbits.RA7;
+            }
+ 
+            if (sample_DV && virtual_channel_on == 1) {
+                DV_buffer[sample_index] = saved_virtual_value;
+            }
+ 
+            if (virtual_channel_on == 1 && sample_DV == 1) {
+                current_dv = saved_virtual_value;
+ 
+                if (current_dv == alert_value_dv && alert_active_dv == 0) {
+                    send_dv_alert(current_dv);
+                    alert_active_dv = 1;
+                } else if (current_dv != alert_value_dv) {
+                    alert_active_dv = 0;
+                }
+            }
+ 
+            sample_index++;
+ 
+            if (sample_index >= samples_per_msg) {
+                UART1_write_str("{");
+                first_field = 1;
+ 
+                if (sample_Ax) UART1_write_int_array("Ax", Pot_buffer,    samples_per_msg, &first_field);
+                if (sample_Ay) UART1_write_int_array("Ay", Temp_buffer,   samples_per_msg, &first_field);
+                if (sample_Az) UART1_write_int_array("Az", Sensor3_buffer, samples_per_msg, &first_field);
+ 
+                if (sample_Ard) {
+                    UART1_write_int_array("Ard_A0", Ard_A0_buffer, samples_per_msg, &first_field);
+                    UART1_write_int_array("Ard_A1", Ard_A1_buffer, samples_per_msg, &first_field);
+                }
+ 
+                if (sample_D6) UART1_write_int_array("D6", D6_buffer, samples_per_msg, &first_field);
+                if (sample_D7) UART1_write_int_array("D7", D7_buffer, samples_per_msg, &first_field);
+ 
+                if (sample_DB && RA7_input == 1)
+                    UART1_write_int_array("DB", DB_buffer, samples_per_msg, &first_field);
+ 
+                if (sample_DV && virtual_channel_on == 1)
+                    UART1_write_int_array("DV", DV_buffer, samples_per_msg, &first_field);
+ 
+                UART1_write_str("}");
+                UART1_write_str("\r\n");
+ 
+                sample_index = 0;
+            }
+ 
+            time_to_sample = 0;
+        }
+    }
+ 
+    return 0;
+}
