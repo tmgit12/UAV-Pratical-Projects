@@ -77,11 +77,11 @@ B = double(subs(B_sym, param_syms, param_values));
 % model.
 
 % Design LQR controler
-qp = 50;
-qv = 1;
-r = 10;
-Q = [qp*eye(3),  zeros(3,3);
-     zeros(3,3), qv*eye(3)];
+Qp = diag([120, 120, 250]);
+Qv = diag([2, 2, 6]);
+Q = [Qp,  zeros(3,3);
+     zeros(3,3), Qv];
+r = 5;
 R_lqr = r * eye(3);
 
 [K,P,poles] = lqr(A,B,Q,R_lqr);
@@ -164,6 +164,11 @@ x_nonlin(:, end) = [];
 
 % ---------------- Plots for the state LQR --------------------------------
 
+% Time markers
+t_start = 1.0;
+t_rise = t_start + 1.1;
+t_settle = t_start + 3.5;
+
 % Plotting Results
 figure('Name', 'Closed-loop Trajectory', 'NumberTitle', 'off');
 
@@ -171,68 +176,85 @@ figure('Name', 'Closed-loop Trajectory', 'NumberTitle', 'off');
 subplot(3,1,1);
 plot(t, x_lin(1,:), 'b-', t, x_nonlin(1,:), 'r--', t, x_ref_log(1,:), ...
     'k:', 'LineWidth', 1.5);
+hold on;
+
+% Dynamic 5% bounds for X (based on the initial 5m step -> 0.25m margin)
+plot(t, x_ref_log(1,:) + 0.25, 'g:', 'LineWidth', 1);
+plot(t, x_ref_log(1,:) - 0.25, 'g:', 'LineWidth', 1);
+
+xline(t_rise, 'm-.', 'Rise Time', 'LabelVerticalAlignment', 'bottom');
+xline(t_settle, 'c-.', 'Settling Time', 'LabelVerticalAlignment', 'bottom');
 ylabel('$$p_x$$ (m)', 'Interpreter', 'latex');
-legend('Linear', 'Nonlinear', 'Target', 'Location', 'best');
+legend('Linear', 'Nonlinear', 'Target', '5% Bounds', 'Location', 'best');
 title('Closed-loop Response (Position)'); grid on;
 
 % Plot Y Position
 subplot(3,1,2);
 plot(t, x_lin(2,:), 'b-', t, x_nonlin(2,:), 'r--', t, x_ref_log(2,:), ...
     'k:', 'LineWidth', 1.5);
+% Static bounds for Y (Target = 5m)
+yline(5.25, 'g:', '+5% Overshoot');
+yline(4.75, 'g:', '-5% Settling');
+xline(t_rise, 'm-.', 'Rise Time', 'LabelVerticalAlignment', 'bottom');
+xline(t_settle, 'c-.', 'Settling Time', 'LabelVerticalAlignment', 'bottom');
 ylabel('$$p_y$$ (m)', 'Interpreter', 'latex'); grid on;
 
 % Plot Z Position
 subplot(3,1,3);
 plot(t, x_lin(3,:), 'b-', t, x_nonlin(3,:), 'r--', t, x_ref_log(3,:), ...
     'k:', 'LineWidth', 1.5);
+% Static bounds for Z (Target = 2m)
+yline(2.1, 'g:', '+5% Overshoot');
+yline(1.9, 'g:', '-5% Settling');
+xline(t_rise, 'm-.', 'Rise Time', 'LabelVerticalAlignment', 'bottom');
+xline(t_settle, 'c-.', 'Settling Time', 'LabelVerticalAlignment', 'bottom');
 ylabel('$$p_z$$ (m)', 'Interpreter', 'latex');
 xlabel('Time [s]'); grid on;
 
-
-% 3D Trajectory Plot
-figure('Name', '3D Flight Trajectory', 'NumberTitle', 'off');
-
-% Plot the trajectories
-plot3(x_lin(1,:), x_lin(2,:), x_lin(3,:), 'b-', 'LineWidth', 1.5);
-hold on;
-plot3(x_nonlin(1,:), x_nonlin(2,:), x_nonlin(3,:), 'r--', 'LineWidth',...
-    1.5);
-plot3(x_ref_log(1,:), x_ref_log(2,:), x_ref_log(3,:), 'k:', 'LineWidth',...
-    1.5);
-% Add Start and End markers (Helps visualize the direction of flight)
-plot3(x_lin(1,1), x_lin(2,1), x_lin(3,1), 'go', 'MarkerSize', 8, ...
-    'MarkerFaceColor', 'g'); % Start Point
-plot3(x_ref_log(1,end), x_ref_log(2,end), x_ref_log(3,end), 'ro', ...
-    'MarkerSize', 8, 'MarkerFaceColor', 'r'); % Target End Point
-% Formatting and Labels
-grid on;
-xlabel('$$p_x$$ (m)', 'Interpreter', 'latex');
-ylabel('$$p_y$$ (m)', 'Interpreter', 'latex');
-zlabel('$$p_z$$ (m)', 'Interpreter', 'latex');
-title('3D Trajectory Tracking (Linear vs Nonlinear)');
-legend('Linear', 'Nonlinear', 'Target Path', 'Start', 'Final Target', ...
-    'Location', 'best');
-% Set the viewing angle
-view(-45, 30); % Sets a nice isometric viewing angle (Azimuth, Elevation)
-axis equal;
+% % 3D Trajectory Plot
+% figure('Name', '3D Flight Trajectory', 'NumberTitle', 'off');
+% 
+% % Plot the trajectories
+% plot3(x_lin(1,:), x_lin(2,:), x_lin(3,:), 'b-', 'LineWidth', 1.5);
+% hold on;
+% plot3(x_nonlin(1,:), x_nonlin(2,:), x_nonlin(3,:), 'r--', 'LineWidth',...
+%     1.5);
+% plot3(x_ref_log(1,:), x_ref_log(2,:), x_ref_log(3,:), 'k:', 'LineWidth',...
+%     1.5);
+% % Add Start and End markers (Helps visualize the direction of flight)
+% plot3(x_lin(1,1), x_lin(2,1), x_lin(3,1), 'go', 'MarkerSize', 8, ...
+%     'MarkerFaceColor', 'g'); % Start Point
+% plot3(x_ref_log(1,end), x_ref_log(2,end), x_ref_log(3,end), 'ro', ...
+%     'MarkerSize', 8, 'MarkerFaceColor', 'r'); % Target End Point
+% % Formatting and Labels
+% grid on;
+% xlabel('$$p_x$$ (m)', 'Interpreter', 'latex');
+% ylabel('$$p_y$$ (m)', 'Interpreter', 'latex');
+% zlabel('$$p_z$$ (m)', 'Interpreter', 'latex');
+% title('3D Trajectory Tracking (Linear vs Nonlinear)');
+% legend('Linear', 'Nonlinear', 'Target Path', 'Start', 'Final Target', ...
+%     'Location', 'best');
+% % Set the viewing angle
+% view(-45, 30); % Sets a nice isometric viewing angle (Azimuth, Elevation)
+% axis equal;
 
 
 % ---------------- Plots for LQR Actuation --------------------------------
-% figure('Name', 'Nonlinear Actuation', 'NumberTitle', 'off');
-% 
-% % Plot Thrust
-% subplot(2,1,1);
-% plot(t, u_lambda_log(1,:), 'g', 'LineWidth', 1.5);
-% ylabel('Thrust (N)');
-% title('Closed-loop Actuation Commands'); grid on;
-% 
-% % Plot Roll and Pitch Angles
-% subplot(2,1,2);
-% plot(t, rad2deg(u_lambda_log(2,:)), 'b', t, ...
-%    rad2deg(u_lambda_log(3,:)), 'r', 'LineWidth', 1.5);
-% ylabel('Angle (deg)');
-% legend('\phi (Roll)', '\theta (Pitch)', 'Location', 'best');
-% xlabel('Time [s]'); grid on;
+figure('Name', 'Nonlinear Actuation', 'NumberTitle', 'off');
+
+% Plot Thrust
+subplot(2,1,1);
+plot(t, u_lambda_log(1,:), 'g', 'LineWidth', 1.5);
+ylabel('Thrust (N)');
+title('Closed-loop Actuation Commands'); grid on;
+
+% Plot Roll and Pitch Angles
+subplot(2,1,2);
+plot(t, rad2deg(u_lambda_log(2,:)), 'b', t, ...
+   rad2deg(u_lambda_log(3,:)), 'r', 'LineWidth', 1.5);
+ylabel('Angle (deg)');
+legend('\phi (Roll)', '\theta (Pitch)', 'Location', 'best');
+xlabel('Time [s]'); grid on;
 
 %% 1.5 Consider now an error state vector defined as ˜x = x - _x, where we 
 % assume that the reference state, _x, is driven by the same dynamics as x.
