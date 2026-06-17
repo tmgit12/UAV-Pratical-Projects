@@ -262,17 +262,16 @@ xlabel('Time [s]'); grid on;
 
 A_err = A;
 B_err = B;
-
 %% 1.6 Design an LQR controller for this error model and test it in 
 % simulation. Comment on the difference between this linear model and the 
 % previous one.
 
 % Design error LQR controler
-qp_err = 50;
-qv_err = 1;
-r_err = 10;
-Q_err = [qp_err*eye(3),  zeros(3,3);
-     zeros(3,3), qv_err*eye(3)];
+Qp_err = diag([350, 350, 400]);
+Qv_err = diag([30, 30, 35]);    
+Q_err = [Qp_err, zeros(3,3);
+    zeros(3,3), Qv_err];
+ r_err = 5;
 R_lqr_err = r_err * eye(3);
 
 % Recalculate LQR gain
