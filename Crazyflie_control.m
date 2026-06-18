@@ -429,8 +429,24 @@ view(-45,30);
 % u_a \in R^3 and assuming a zero yaw, that is able to achieve asymptotic 
 % stability in the Lyapunov sense (prove this result).
 
-Kp_mat = diag([10, 10, 15]); % Position error gains
-Kv_mat = diag([5, 5, 8]);
+rise_time = 1.1;
+setlling_time = 3.2;
+overshoot = 5;
+
+fator_amortecimento = sqrt(log(overshoot/100)^2/(pi^2+log(overshoot/100)^2));
+freq_natural_risetime = (3.7*fator_amortecimento) / rise_time; %antes era 3.7 mas queria deixar 4x mais rápido
+freq_natural_setlling_time = 3/(setlling_time*fator_amortecimento); %antes era 3 mas queria deixar 1.48x mais rápido
+
+freq_natural = max(freq_natural_setlling_time,freq_natural_risetime);
+
+Kp_gain = 2 * fator_amortecimento * freq_natural; %o fator de amortecimento é 5.30 no eixo Z
+Kd_gain = freq_natural^2; % tem de ser 2.83 no eixo Z
+
+%Kp_mat = diag([Kp_gain, Kp_gain, Kp_gain]); % Position error gains
+%Kv_mat = diag([Kd_gain, Kd_gain, Kd_gain]);
+
+Kp_mat = diag([16, 16.0, 30.0]); % Z ligeiramente mais forte
+Kv_mat = diag([12, 12, 8]);
 
 %% 2.2 Test this controller in simulation and compare with the previous 
 % linear controller.
