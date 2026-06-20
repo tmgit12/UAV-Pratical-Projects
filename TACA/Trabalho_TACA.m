@@ -1,7 +1,7 @@
 %% Simulates OFDM
 EN=[0:2:22]'+0*100; en = 10 .^(EN/10) ;
 N=512;
-NSlot=1000;
+NSlot=3255; % para fazer aproximadamene 10e6 bits com 3072 bits/slot precisamos de 10e6/3072=3255 slots
 CHANNEL='RAYL';
 L=1; % L-th order diversity
 Ts=4e-6; % Block duration
@@ -29,6 +29,32 @@ dict = huffmandict(num2cell(alphabet), prob);
 % É preciso fazer num2cell(alphabet) para passar de 'abc...'  para 
 % {'a', 'b', 'c', ...}
 base_encoded_msg = huffmanenco(num2cell(msg), dict);
+
+
+% Ritmos (bits/simbolo)
+% Huffman
+% nº de simbolos no dict
+num_symbols = size(dict, 1);
+
+% comprimento de cada simbolo
+huffman_lengths = zeros(1, num_symbols);
+for i = 1:num_symbols
+    
+    % Ver a palavra codificada na 2a coluna
+    codeword = dict{i, 2};
+    huffman_lengths(i) = length(codeword);
+end
+huffman_rate = sum(prob .* huffman_lengths');  % Expected value
+
+% Codigo equiprovavel
+% Log2(27) o alfabeto tem 27 simbolos únicos (a contar com o espaço)
+equiprobable_rate = ceil(log2(length(alphabet))); 
+
+% ASCII usa 8 bits/mensagem
+ascii_rate = 8; 
+
+% Eficiencia de compressao
+compression_gain = (1 - (huffman_rate / equiprobable_rate)) * 100;
 
 % Bits para a simulação
 M = 64;                 % 64-QAM
