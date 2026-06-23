@@ -2,7 +2,7 @@
 EN=[0:2:22]'+0*100; en = 10 .^(EN/10) ;
 N=512;
 NSlot=3255; % para fazer aproximadamene 10e6 bits com 3072 bits/slot precisamos de 10e6/3072=3255 slots
-CHANNEL='RAYL';
+CHANNEL='AWGN';
 L=1; % L-th order diversity
 Ts=4e-6; % Block duration
 Tg=0.2*Ts; % Cyclic prefix durration
@@ -55,6 +55,7 @@ ascii_rate = 8;
 
 % Eficiencia de compressao
 compression_gain = (1 - (huffman_rate / equiprobable_rate)) * 100;
+
 
 % Bits para a simulação
 M = 64;                 % 64-QAM
@@ -127,13 +128,12 @@ for nn=1:NSlot
     end;
     H2k=abs(Hk).^2;
     if (L==1) sH2k=H2k; else sH2k=sum(H2k')'; end;
-    % --- CHANGED: 3. Huffman Stream to 64-QAM Mapping ---
-    % Grab the specific chunk of bits for this slot
+    % --- Huffman Stream to 64-QAM Mapping ---
     bit_idx_start = (nn-1)*bits_per_slot + 1;
     bit_idx_end = nn*bits_per_slot;
     bits_Tx = full_encoded_stream(bit_idx_start:bit_idx_end).';
     
-    % Modulate using 64-QAM
+    % Modulate in 64-QAM
     %Ak_Tx=qammod(bits,64,InputType='bit')
     Ak_Tx = qammod(bits_Tx, M, 'InputType', 'bit');
     %Ak_Tx=sign(randn(N,1))+j*sign(randn(N,1)); % +/-1 +/-j
