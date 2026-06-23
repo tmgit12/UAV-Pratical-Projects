@@ -189,3 +189,222 @@ semilogy(EN,Pb,'g-*',EN,PbAWGN,'b:')
 xlabel('E_b/N_0(dB)'),ylabel('BER')
 axis([0 20 1e-4 1])
 %pause,clf;
+
+
+%% Parte 2
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Configuração
+CODING_SCHEME = 'CONV';      % 'UNC' (Uncoded), 'HAMMING', 'CONV', 'CONCAT', 'TURBO'
+CHANNEL       = 'RAYL';      % 'AWGN' ou 'RAYL'
+ESTIMATION    = 'IMPERFECT'; % 'PERFECT' ou 'IMPERFECT'
+M             = 64;          % 4 para QPSK, 64 para 64-QAM
+EN_dB         = 0:2:30;      % Eb/No em dB (até 30dB para Rayleigh/Rice, até 7 para AWGN)
+NSlot         = 500;
+
+% Parametros OFDM
+N=512;       % Subcarriers
+Ts=4e-6;      % Block duration
+Tg=0.2 * Ts;  % Cyclic prefix durration
+L=1; % L-th order diversity
+k_mod = log2(M);% Bits per symbol
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Configurar FEC e baralhador
+info_frame_len = 1122; % Base information bits per frame (multiple of 11 for Hamming and of 6 for for 64 QAM)
+
+switch CODING_SCHEME
+    case 'UNC'
+        code_rate = 1;
+        enc_len = info_frame_len;
+        
+    case 'HAMMING'
+        code_rate = 11/15;
+        % O matlab já trazia um codificador de Hamming
+        hHamEnc = comm.HammingEncoder(15, 11);
+        hHamDec = comm.HammingDecoder(15, 11);
+        enc_len = info_frame_len * (15/11);
+        
+    case 'CONV'
+        code_rate = 1/2;
+        trellis = poly2trellis(7, [171 133]);
+        enc_len = info_frame_len * 2;
+        
+    case 'CONCAT'
+        % Junção do código de blocos com o convolucional
+        code_rate = (11/15) * (1/2);
+        hHamEnc = comm.HammingEncoder(15, 11);
+        hHamDec = comm.HammingDecoder(15, 11);
+        trellis = poly2trellis(7, [171 133]);
+        enc_len = info_frame_len * (15/11) * 2;
+        
+    case 'TURBO'
+        code_rate = 1/3;
+        turboTrellis = poly2trellis(4, [13 15 17], 13);
+        intrlvrInd = randperm(RandStream('mt19937ar','Seed',11), info_frame_len);
+        hTEnc = comm.TurboEncoder('TrellisStructure', turboTrellis, 'InterleaverIndices', intrlvrInd);
+        hTDec = comm.TurboDecoder('TrellisStructure', turboTrellis, 'InterleaverIndices', intrlvrInd, 'NumIterations', 4);
+        enc_len = info_frame_len * 3 + 12; % Turbo adds 12 tail bits
+end
+
+% Baralhador
+rng(12345); % Fixed seed for interleaver
+permVec = randperm(enc_len)';
+
+
+% Numero de bits necessarios, repeticao da mensagem, os codifiadores
+% recebem colunas
+total_info_bits_needed = NSlot * info_frame_len;
+num_repeats = ceil(total_info_bits_needed / length(base_encoded_msg));
+phase2_input_stream = repmat(base_encoded_msg, 1, num_repeats);
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Simulação
+en = 10 .^ (EN_dB / 10);
+NEN = length(EN_dB);
+BER = zeros(NEN, 1);
+FER = zeros(NEN, 1); % Frame Error Rate = Retransmission Probability
+
+fprintf('Starting %s simulation over %s channel (%s estimation)\n', CODING_SCHEME, CHANNEL, ESTIMATION);
+
+for nEN = 1:NEN
+    
+    % Eb=1 QPSK; Eb=2.5 16QAM; Eb=7 64QAM
+    % É NECESSÁRIO AJUSTAR E_b COM BASE NA MODULAÇÃO
+    Eb = 1 / (k_mod * code_rate);
+    sigma = sqrt(Eb / 2 / en(nEN));
+    current_noise_var = 2 * (sigma^2);
+    
+    bit_err_count = 0;
+    frame_err_count = 0;
+    total_bits = 0;
+    
+    for nn = 1:NSlot
+        
+        % Gerar bits e codificar
+        start_idx = (nn-1) * info_frame_len + 1;
+        end_idx = nn * info_frame_len;
+        info_bits = phase2_input_stream(start_idx:end_idx);
+        info_bits = info_bits(:);
+        
+        switch CODING_SCHEME
+            case 'UNC'
+                enc_bits = info_bits;
+            case 'HAMMING'
+                enc_bits = step(hHamEnc, info_bits);
+            case 'CONV'
+                enc_bits = convenc(info_bits, trellis);
+            case 'CONCAT'
+                outer_bits = step(hHamEnc, info_bits);
+                enc_bits = convenc(outer_bits, trellis);
+            case 'TURBO'
+                enc_bits = step(hTEnc, info_bits);
+        end
+        
+        % baralhar e modular
+        int_bits = intrlv(enc_bits(:), permVec);
+        tx_sym = qammod(int_bits(:), M, 'InputType', 'bit', 'UnitAveragePower', true);
+        
+        % juntar em blocos OFDM
+        num_syms = length(tx_sym);
+        num_ofdm_blocks = ceil(num_syms / N);
+        pad_len = num_ofdm_blocks * N - num_syms;
+        tx_sym_padded = [tx_sym(:); zeros(pad_len, 1)]; % Pad to fit OFDM subcarriers
+        
+        rx_sym_padded = zeros(size(tx_sym_padded));
+        
+        % transmissão OFDM
+        for b = 1:num_ofdm_blocks
+            idx = (b-1)*N + 1 : b*N;
+            Ak_Tx = tx_sym_padded(idx);
+            
+            % Channel Generation
+            if strcmp(CHANNEL, 'RAYL')
+                Hk = (randn(N,L) + 1i*randn(N,L)) / sqrt(2);
+            else % AWGN
+                Hk = ones(N,L) .* exp(1i*2*pi*rand(N,L));
+            end
+            sH2k = sum(abs(Hk).^2, 2);
+            
+            % Channel Estimation
+            if strcmp(ESTIMATION, 'IMPERFECT')
+                amp_err = -0.1 + 0.2 * rand(N, L);         % Max 10% amp error
+                phase_err = deg2rad(-5 + 10 * rand(N, L)); % Max 5 deg phase error
+                H_est = Hk .* (1 + amp_err) .* exp(1i * phase_err);
+            else
+                H_est = Hk;
+            end
+            sH2k_est = sum(abs(H_est).^2, 2);
+            
+            % Additive Noise & Equalization
+            Yk = zeros(N, L);
+            YIk = zeros(N, 1);
+            for l = 1:L
+                Yk(:,l) = Ak_Tx .* Hk(:,l) + (randn(N,1) + 1i*randn(N,1)) * sigma;
+                YIk = YIk + Yk(:,l) .* conj(H_est(:,l)); % Equalize with estimate
+            end
+            YIk = YIk ./ sH2k_est;
+            rx_sym_padded(idx) = YIk;
+        end
+        
+        % desmodular
+        rx_sym = rx_sym_padded(1:num_syms); % Remove padding
+        
+        if strcmp(CODING_SCHEME, 'TURBO')
+            % Turbo needs Soft LLRs
+            demod_out = qamdemod(rx_sym(:), M, 'OutputType', 'approxllr', ...
+                'UnitAveragePower', true, 'NoiseVariance', current_noise_var);
+        else
+            % Others use Hard Bits for simplicity
+            demod_out = qamdemod(rx_sym(:), M, 'OutputType', 'bit', ...
+                'UnitAveragePower', true);
+        end
+        
+        % desbaralhar e descodificar
+        deint_out = deintrlv(demod_out(:), permVec);
+        
+        switch CODING_SCHEME
+            case 'UNC'
+                dec_bits = deint_out;
+            case 'HAMMING'
+                dec_bits = step(hHamDec, deint_out);
+            case 'CONV'
+                dec_bits = vitdec(deint_out, trellis, 35, 'trunc', 'hard');
+            case 'CONCAT'
+                inner_dec = vitdec(deint_out, trellis, 35, 'trunc', 'hard');
+                dec_bits = step(hHamDec, inner_dec);
+            case 'TURBO'
+                dec_bits = step(hTDec, deint_out);
+        end
+        
+        % erros
+        errs_in_frame = sum(info_bits(:) ~= dec_bits(:));
+        bit_err_count = bit_err_count + errs_in_frame;
+        total_bits = total_bits + info_frame_len;
+        
+        if errs_in_frame > 0
+            frame_err_count = frame_err_count + 1;
+        end
+    end
+    
+    BER(nEN) = bit_err_count / total_bits;
+    FER(nEN) = frame_err_count / NSlot; % Retransmission probability
+    
+    fprintf('Eb/No: %2d dB | BER: %e | FER (Retransmissions): %e\n', EN_dB(nEN), BER(nEN), FER(nEN));
+end
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Resultados visuais
+figure;
+subplot(1,2,1);
+semilogy(EN_dB, BER, 'LineWidth', 2, 'Marker', 'o');
+grid on; xlabel('E_b/N_0 (dB)'); ylabel('BER');
+title(sprintf('BER: %s | %s | %s Est', CODING_SCHEME, CHANNEL, ESTIMATION));
+ylim([1e-5 1]);
+
+subplot(1,2,2);
+semilogy(EN_dB, FER, 'LineWidth', 2, 'Marker', 's', 'Color', 'r');
+grid on; xlabel('E_b/N_0 (dB)'); ylabel('FER (Retransmission Prob)');
+title('Retransmission Probability');
+ylim([1e-5 1]);
