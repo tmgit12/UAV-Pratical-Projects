@@ -44,17 +44,14 @@ for i = 1:num_symbols
     codeword = dict{i, 2};
     huffman_lengths(i) = length(codeword);
 end
-huffman_rate = sum(prob .* huffman_lengths');  % Expected value
+huffman_rate = sum(prob .* huffman_lengths);  % Expected value
 
 % Codigo equiprovavel
 % Log2(27) o alfabeto tem 27 simbolos únicos (a contar com o espaço)
 equiprobable_rate = ceil(log2(length(alphabet))); 
 
-% ASCII usa 8 bits/mensagem
+% ASCII usa 8 bits/caracter
 ascii_rate = 8; 
-
-% Eficiencia de compressao
-compression_gain = (1 - (huffman_rate / equiprobable_rate)) * 100;
 
 
 % Bits para a simulação
@@ -166,7 +163,8 @@ for nn=1:NSlot
         NErr(nEN,1)=NErr(nEN,1)+aux;
     end;
 
-    if (rem(nn,100)==0) nn, end;
+    if (rem(nn,100)==0) nn;
+    end;
 end;
 
 % BER in Rayleigh channel and L-branch diversity [Proakis]
@@ -178,9 +176,11 @@ aux=sqrt(en./(1+en));Pb_tr=0;
 
 % BER
 Pb = NErr / (NSlot * bits_per_slot);
-%%
+
+
+
+
 % Theoretical BER for 64-QAM in AWGN (approximation)
-% Note: Using standard qfunc since q_x is a custom function
 % BER in AWGN 
 PbAWGN=q_x(sqrt(2*L*en));
 
@@ -189,7 +189,6 @@ semilogy(EN,Pb,'g-*',EN,PbAWGN,'b:')
 xlabel('E_b/N_0(dB)'),ylabel('BER')
 axis([0 20 1e-4 1])
 %pause,clf;
-
 
 %% Parte 2
 
